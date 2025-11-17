@@ -707,7 +707,7 @@
   function clipboardOrPrompt(text){
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(text)
-        .then(()=> alert('✅ Nusxa olindi. Istalgan joyga ulashing (Telegramga yopishtiring).'))
+        .then(()=> alert('✅ siz (copy qildingiz) Nusxa olindi. telegramga guruhizga kiring va vstavit qiling!(hozir) (Telegramga boring hozir nusxa oldiz , telegramga borasiz vstavit qilasiz).'))
         .catch(()=> prompt('Matnni qo‘lda nusxalang (Ctrl+C):', text));
     } else {
       prompt('Matnni qo‘lda nusxalang (Ctrl+C):', text);
