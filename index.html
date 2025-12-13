@@ -1467,23 +1467,16 @@ function pct(rec){ return Math.round((rec.score/rec.total)*100); }
 
 
 function makeAllStatsText(test, arr){
-  let text = `🏁 Reyting (12 soatlik tafsilotlar o‘chadi)
-🧪 Test: ${test.name} (${test.code})
-📝 Savollar: ${test.count} ta
-👥 Ishtirokchilar: ${arr.length} ta
----
-`;
+  let text = `🏁 Reyting (12 soatlik tafsilotlar o‘chadi)\n🧪 Test: ${test.name} (${test.code})\n📝 Savollar: ${test.count} ta\n👥 Ishtirokchilar: ${arr.length} ta\n---\n`;
   if(!arr.length){
-    text += "Hali natijalar yo‘q.
-";
+    text += "Hali natijalar yo‘q.\n";
     return text;
   }
   arr.slice(0, 200).forEach((r,i)=>{
-    const total = (Number(r.correctTotal||0)+Number(r.wrongTotal||0));
-    const acc = total ? Math.round((Number(r.correctTotal||0)/total)*100) : 0;
+    const total = (Number(r.correctTotal||0) + Number(r.wrongTotal||0));
+    const acc = total ? Math.round((Number(r.correctTotal||0) / total) * 100) : 0;
     const badge = i===0 ? "🥇" : i===1 ? "🥈" : i===2 ? "🥉" : "🏅";
-    text += `${badge} ${i+1}) ${r.login} | urinish: ${Number(r.attempts||0)} | ✅ ${Number(r.correctTotal||0)} | ❌ ${Number(r.wrongTotal||0)} | ${acc}%
-`;
+    text += `${badge} ${i+1}) ${r.login} | urinish: ${Number(r.attempts||0)} | ✅ ${Number(r.correctTotal||0)} | ❌ ${Number(r.wrongTotal||0)} | ${acc}%\n`;
   });
   return text;
 }
@@ -1495,8 +1488,7 @@ function makeCopyText(test, rec){
   lines.push(`📊 Natija: ${rec.score}/${rec.total} — ${pct(rec)}%`);
   lines.push("---");
   rec.details.forEach(d=> lines.push(`${d.q}) tanlandi: ${d.chosen} | to‘g‘ri: ${d.correct} ${d.ok?"✅":"❌"}`));
-  return lines.join("
-");
+  return lines.join("\n");
 }
 
 function renderMyDetail(rec){
