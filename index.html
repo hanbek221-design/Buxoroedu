@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>TestMaster — BUXORO_EDU (Cloud)</title>
 
-  <!-- Telegram WebApp SDK (tahlil linkni Telegram ichida ochish uchun) -->
+  <!-- Telegram WebApp SDK (linklarni Telegram ichida ochish uchun) -->
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
   <style>
@@ -63,14 +63,11 @@
     .btn:hover{transform:translateY(-1px); box-shadow:0 10px 24px rgba(0,0,0,.25)}
     .btn.primary{background:linear-gradient(180deg, rgba(96,165,250,.35), rgba(96,165,250,.25)); border-color:#3b82f6}
     .btn.ghost{background:rgba(255,255,255,.04)}
+    .btn.video{background:rgba(34,197,94,.12);border-color:rgba(34,197,94,.35)}
+    .btn.pdf{background:rgba(245,158,11,.12);border-color:rgba(245,158,11,.35)}
+    .btn.tg{background:rgba(239,68,68,.12);border-color:rgba(239,68,68,.35)}
+
     .btn.small{padding:7px 10px;font-size:13px}
-
-    /* NEW: Telegram tahlil tugmasi */
-    .btn.tg{
-      background:rgba(239,68,68,.12);
-      border-color:rgba(239,68,68,.35);
-    }
-
     .row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
     .flex{display:flex;gap:10px;align-items:center}
     .space{flex:1}
@@ -106,8 +103,6 @@
     .focus-q{ outline:2px solid #60a5fa; border-color:#60a5fa; box-shadow:0 0 0 3px rgba(96,165,250,.25) }
     .my-row{ background: rgba(96,165,250,.15); }
     .adm-qrow{ margin:8px 0; padding:12px; border:1px dashed var(--border); border-radius:14px; }
-
-    .muted{color:var(--muted)}
   </style>
 </head>
 <body>
@@ -171,10 +166,10 @@
             <label>Test nomi</label><input id="tName" />
             <label style="margin-top:10px">Maxsus kod</label><input id="tCode" />
             <label style="margin-top:10px">Savollar soni</label><input id="tCount" type="number" value="5" min="1" />
-
-            <!-- NEW: Telegram tahlil linki -->
-            <label style="margin-top:10px">Telegram tahlil linki (ixtiyoriy)</label>
-            <input id="tAnalysisLink" placeholder="https://t.me/c/3086001686/2/17260" />
+            <!-- NEW: ixtiyoriy material linklar -->
+            <label style="margin-top:10px">Video tahlil linki (ixtiyoriy)</label><input id="tVideoLink" placeholder="https://..." />
+            <label style="margin-top:10px">PDF test linki (ixtiyoriy)</label><input id="tPdfLink" placeholder="https://..." />
+            <label style="margin-top:10px">Test tahlili linki (ixtiyoriy, test tugagach)</label><input id="tAnalysisLink" placeholder="https://t.me/c/3086001686/2/17260" />
 
             <div class="flex" style="margin-top:10px">
               <button class="btn" id="btnBuildGrid">Javob panellari</button>
@@ -271,42 +266,52 @@
   const app = initializeApp(firebaseConfig);
   const db  = getFirestore(app);
 
-  /* ——— Telegram init (ixtiyoriy) ——— */
-  try {
-    const tg = window.Telegram?.WebApp;
-    if (tg) tg.ready();
-  } catch(e){}
-
   /* ——— Helpers ——— */
   const $ = (id)=>document.getElementById(id);
   function show(id,on=true){ const el=$(id); if(el) el.classList.toggle('hidden', !on) }
   function escapeHtml(s){ return (s||'').toString().replace(/[&<>"]/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m])) }
 
-  // NEW: Telegram tahlil link helperlari
-  function normalizeTgLink(u){
+  // === NEW: Material link helpers (Video / PDF / Test tahlili) ===
+  function normalizeLink(u){
     let url = (u||'').trim();
     if(!url) return '';
     if(url.startsWith('t.me/')) url = 'https://' + url;
+    if(!/^https?:\/\//i.test(url)) url = 'https://' + url;
     return url;
   }
-  function isValidTgLink(url){
-    if(!url) return true;
-    return /^https:\/\/t\.me\//i.test(url);
+  function isValidLink(url){
+    if(!url) return true; // ixtiyoriy
+    return /^https?:\/\//i.test(url);
   }
-  function openTgLink(url){
+  function openSmartLink(url){
     if(!url) return;
     const tg = window.Telegram?.WebApp;
-    if(tg && typeof tg.openTelegramLink === 'function'){
+    if(tg && /^(https?:\/\/)?t\.me\//i.test(url) && typeof tg.openTelegramLink === 'function'){
       tg.openTelegramLink(url);
+      return;
+    }
+    if(tg && typeof tg.openLink === 'function'){
+      tg.openLink(url);
       return;
     }
     window.open(url, '_blank', 'noopener,noreferrer');
   }
+  function _lsKey(prefix, code, login){
+    return `tm_${prefix}__${(code||'').toLowerCase()}__${(login||'').toLowerCase()}`;
+  }
+  function hasSeenAnalysis(code){
+    try{ return localStorage.getItem(_lsKey('analysis_seen', code, SESSION.login)) === '1'; }
+    catch(e){ return false; }
+  }
+  function markSeenAnalysis(code){
+    try{ localStorage.setItem(_lsKey('analysis_seen', code, SESSION.login), '1'); }catch(e){}
+  }
+
 
   /* ——— Qidiruv klaviatura holati ——— */
   let __searchItems = [];
   let __searchIndex = -1;
-  let __searchTimer = null;
+  let __searchTimer = null; /* <- oldingi kodingizda yo‘q edi, qo‘shildi */
   function setActiveCard(idx){
     __searchIndex = idx;
     document.querySelectorAll('#testsList .card').forEach(el=> el.classList.remove('active-card'));
@@ -335,21 +340,14 @@
 
   /* ——— DB qatlam (users yo‘q) ——— */
   const DB = {
-    async saveTest({name, code, count, key, analysisLink}){
-      await setDoc(doc(db,'tests', code), {
-        name, code, count, key,
-        analysisLink: analysisLink || '',
-        updatedAt: Date.now()
-      });
+    async saveTest({name, code, count, key, videoLink, pdfLink, analysisLink}){
+      await setDoc(doc(db,'tests', code), { name, code, count, key, videoLink: videoLink || '', pdfLink: pdfLink || '', analysisLink: analysisLink || '', updatedAt: Date.now() });
       CACHE.tests=null;
     },
 
-    // NEW: faqat tahlil linkni merge bilan yangilash (key/count buzilmaydi)
-    async setAnalysisLink(code, analysisLink){
-      await setDoc(doc(db,'tests', code), {
-        analysisLink: analysisLink || '',
-        updatedAt: Date.now()
-      }, { merge:true });
+    // NEW: linklarni keyin ham yangilash (merge)
+    async setLinks(code, patch){
+      await setDoc(doc(db,'tests', code), { ...patch, updatedAt: Date.now() }, { merge:true });
       CACHE.tests=null;
     },
 
@@ -467,20 +465,21 @@
     const code = ($('tCode').value||'').trim();
     const count = Math.max(1, parseInt(($('tCount').value||'1'),10));
 
-    // NEW
-    const analysisLink = normalizeTgLink(($('tAnalysisLink').value||'').trim());
-    if(!isValidTgLink(analysisLink)) return alert('Telegram link xato. Masalan: https://t.me/c/3086001686/2/17260');
+    // NEW: ixtiyoriy material linklar
+    const videoLink = normalizeLink(($('tVideoLink')?.value||''));
+    const pdfLink = normalizeLink(($('tPdfLink')?.value||''));
+    const analysisLink = normalizeLink(($('tAnalysisLink')?.value||''));
 
+    if(!isValidLink(videoLink) || !isValidLink(pdfLink) || !isValidLink(analysisLink)){
+      return alert('Link xato. Masalan: https://... (video/pdf) yoki https://t.me/... (tahlil)');
+    }
     if(!name || !code) return alert('Nom va kodni kiriting');
     if(!ADMIN_KEY.length || ADMIN_KEY.length!==count || ADMIN_KEY.some(v=>!v)){
       return alert('Har bir savol uchun A/B/C/D tanlang. Avval "Javob panellari" ni tuzing.');
     }
-
-    await DB.saveTest({ name, code, count, key: ADMIN_KEY.slice(), analysisLink });
+    await DB.saveTest({ name, code, count, key: ADMIN_KEY.slice(), videoLink, pdfLink, analysisLink });
     alert('✅ Test saqlandi');
-
-    $('tName').value=''; $('tCode').value=''; $('tCount').value=5; $('tAnalysisLink').value='';
-    $('answerGrid').innerHTML=''; ADMIN_KEY=[];
+    $('tName').value=''; $('tCode').value=''; $('tCount').value=5; $('tVideoLink').value=''; $('tPdfLink').value=''; $('tAnalysisLink').value=''; $('answerGrid').innerHTML=''; ADMIN_KEY=[];
     await renderAdminLists();
   }
   $('btnSaveTest').addEventListener('click', saveTest);
@@ -496,13 +495,10 @@
     const tbox = $('adminTests'); tbox.innerHTML='';
     const tests = await DB.allTests();
     if(!tests.length){ tbox.innerHTML = '<div class="muted">Testlar yo‘q</div>'; return; }
-
     for(const t of tests){
       const res = await DB.getResults(t.code);
       const participants = res.length;
-
       const div = document.createElement('div'); div.className='card'; div.style.margin='6px 0';
-
       div.innerHTML = `
         <div class="flex">
           <strong>${escapeHtml(t.name)}</strong>
@@ -514,41 +510,63 @@
           <button class="btn" data-act="view">Natijalar</button>
           <button class="btn" data-act="del">O'chirish</button>
           <button class="btn" data-act="tg">Hisobot nusxasi</button>
-          <button class="btn" data-act="setLink">Tahlil link</button>
+
+          <button class="btn small" data-act="setVideo">Video link</button>
+          <button class="btn small" data-act="setPdf">PDF link</button>
+          <button class="btn small" data-act="setAnalysis">Tahlil link</button>
+
           <div class="space"></div>
         </div>
 
-        ${t.analysisLink ? `
-          <div class="flex" style="margin-top:10px;flex-wrap:wrap">
-            <span class="pill">Tahlil biriktirilgan</span>
-            <div class="space"></div>
-            <button class="btn tg" data-act="openLink">Test tahlilini ko‘ring</button>
-          </div>` : `
-          <div class="muted" style="margin-top:10px;font-size:13px">
-            Tahlil link qo‘shilmagan (xohlasangiz “Tahlil link” tugmasi orqali qo‘shing).
-          </div>`
-        }
+        <div class="flex" style="margin-top:10px;flex-wrap:wrap">
+          ${t.videoLink ? `<button class="btn video small" data-act="openVideo">🎬 Video tahlil</button>` : ``}
+          ${t.pdfLink ? `<button class="btn pdf small" data-act="openPdf">📄 PDF test</button>` : ``}
+          ${t.analysisLink ? `<button class="btn tg small" data-act="openAnalysis">🧾 Test tahlili</button>` : ``}
+          ${(!t.videoLink && !t.pdfLink && !t.analysisLink) ? `<span class="muted">Material linklar yo‘q</span>` : ``}
+          <div class="space"></div>
+        </div>
       `;
+      div.addEventListener('click', async (e)=>{
+        const b = e.target.closest('button[data-act]');
+        if(!b) return;
+        const act = b.dataset.act;
 
-      div.querySelector('[data-act="view"]').addEventListener('click', ()=> viewResults(t.code));
-      div.querySelector('[data-act="del"]').addEventListener('click', (e)=> adminDeleteTest(t.code, e.target));
-      div.querySelector('[data-act="tg"]').addEventListener('click', ()=> adminTgReport(t.code));
+        if(act === 'view') return viewResults(t.code);
+        if(act === 'del') return adminDeleteTest(t.code, b);
+        if(act === 'tg') return adminTgReport(t.code);
 
-      // NEW: tahlil linkni qo‘shish/yangilash
-      div.querySelector('[data-act="setLink"]').addEventListener('click', async ()=>{
-        const cur = t.analysisLink || '';
-        const next = prompt('Telegram tahlil linkini kiriting:', cur);
-        if(next === null) return;
-        const normalized = normalizeTgLink(next);
-        if(!isValidTgLink(normalized)) return alert('Telegram link xato. Masalan: https://t.me/c/3086001686/2/17260');
-        await DB.setAnalysisLink(t.code, normalized);
-        alert('✅ Tahlil link saqlandi');
-        await drawTestsListForAdmin();
+        if(act === 'openVideo' && t.videoLink) return openSmartLink(t.videoLink);
+        if(act === 'openPdf' && t.pdfLink) return openSmartLink(t.pdfLink);
+        if(act === 'openAnalysis' && t.analysisLink) return openSmartLink(t.analysisLink);
+
+        if(act === 'setVideo'){
+          const next = prompt('Video tahlil linkini kiriting (ixtiyoriy):', t.videoLink || '');
+          if(next === null) return;
+          const u = normalizeLink(next);
+          if(!isValidLink(u)) return alert('Link xato. Masalan: https://...');
+          await DB.setLinks(t.code, { videoLink: u || '' });
+          await drawTestsListForAdmin();
+          return;
+        }
+        if(act === 'setPdf'){
+          const next = prompt('PDF test linkini kiriting (ixtiyoriy):', t.pdfLink || '');
+          if(next === null) return;
+          const u = normalizeLink(next);
+          if(!isValidLink(u)) return alert('Link xato. Masalan: https://...');
+          await DB.setLinks(t.code, { pdfLink: u || '' });
+          await drawTestsListForAdmin();
+          return;
+        }
+        if(act === 'setAnalysis'){
+          const next = prompt('Test tahlili linkini kiriting (ixtiyoriy):', t.analysisLink || '');
+          if(next === null) return;
+          const u = normalizeLink(next);
+          if(!isValidLink(u)) return alert('Link xato. Masalan: https://t.me/... yoki https://...');
+          await DB.setLinks(t.code, { analysisLink: u || '' });
+          await drawTestsListForAdmin();
+          return;
+        }
       });
-
-      const openBtn = div.querySelector('[data-act="openLink"]');
-      if(openBtn) openBtn.addEventListener('click', ()=> openTgLink(t.analysisLink));
-
       tbox.appendChild(div);
     }
   }
@@ -627,29 +645,29 @@
     const frag = document.createDocumentFragment();
     filtered.forEach((t,i)=>{
       const card = document.createElement('div'); card.className='card'; card.id = 'srch_'+i; card.style.margin='6px 0';
-      card.innerHTML = `
+            card.innerHTML = `
         <div class="flex"><strong>${escapeHtml(t.name)}</strong><div class="space"></div><span class="pill">${t.count} savol</span></div>
         <div class="flex" style="margin-top:10px;flex-wrap:wrap">
           <button class="btn primary" data-act="start">Testni ishlash</button>
           <button class="btn" data-act="res">Natijalar</button>
+
+          ${t.videoLink ? `<button class="btn video" data-act="video">🎬 Video tahlil</button>` : ``}
+          ${t.pdfLink ? `<button class="btn pdf" data-act="pdf">📄 PDF test</button>` : ``}
+          ${(t.analysisLink && hasSeenAnalysis(t.code)) ? `<button class="btn tg" data-act="analysis">🧾 Test tahlili</button>` : ``}
+
           <div class="space"></div>
           <span class="tag">kod: ${escapeHtml(t.code)}</span>
-        </div>
-
-        ${t.analysisLink ? `
-        <div class="flex" style="margin-top:10px;flex-wrap:wrap">
-          <span class="pill">Tahlil</span>
-          <div class="space"></div>
-          <button class="btn tg" data-act="analysis">Test tahlilini ko‘ring</button>
-        </div>` : ``}
-      `;
-
-      card.querySelector('[data-act="start"]').addEventListener('click', ()=> startTest(t.code));
-      card.querySelector('[data-act="res"]').addEventListener('click', ()=> viewResults(t.code));
-
-      const a = card.querySelector('[data-act="analysis"]');
-      if(a) a.addEventListener('click', ()=> openTgLink(t.analysisLink));
-
+        </div>`;
+      card.addEventListener('click', (e)=>{
+        const b = e.target.closest('button[data-act]');
+        if(!b) return;
+        const act = b.dataset.act;
+        if(act==='start') return startTest(t.code);
+        if(act==='res') return viewResults(t.code);
+        if(act==='video' && t.videoLink) return openSmartLink(t.videoLink);
+        if(act==='pdf' && t.pdfLink) return openSmartLink(t.pdfLink);
+        if(act==='analysis' && t.analysisLink) return openSmartLink(t.analysisLink);
+      });
       frag.appendChild(card);
     });
     box.appendChild(frag); setActiveCard(__searchIndex);
@@ -666,29 +684,29 @@
     const box = $('testsList'); const frag = document.createDocumentFragment();
     list.forEach((t,i)=>{
       const card = document.createElement('div'); card.className='card'; card.id='srch_'+i; card.style.margin='6px 0';
-      card.innerHTML = `
+            card.innerHTML = `
         <div class="flex"><strong>${escapeHtml(t.name)}</strong><div class="space"></div><span class="pill">${t.count} savol</span></div>
         <div class="flex" style="margin-top:10px;flex-wrap:wrap">
           <button class="btn primary" data-act="start">Testni ishlash</button>
           <button class="btn" data-act="res">Natijalar</button>
+
+          ${t.videoLink ? `<button class="btn video" data-act="video">🎬 Video tahlil</button>` : ``}
+          ${t.pdfLink ? `<button class="btn pdf" data-act="pdf">📄 PDF test</button>` : ``}
+          ${(t.analysisLink && hasSeenAnalysis(t.code)) ? `<button class="btn tg" data-act="analysis">🧾 Test tahlili</button>` : ``}
+
           <div class="space"></div>
           <span class="tag">kod: ${escapeHtml(t.code)}</span>
-        </div>
-
-        ${t.analysisLink ? `
-        <div class="flex" style="margin-top:10px;flex-wrap:wrap">
-          <span class="pill">Tahlil</span>
-          <div class="space"></div>
-          <button class="btn tg" data-act="analysis">Test tahlilini ko‘ring</button>
-        </div>` : ``}
-      `;
-
-      card.querySelector('[data-act="start"]').addEventListener('click', ()=> startTest(t.code));
-      card.querySelector('[data-act="res"]').addEventListener('click', ()=> viewResults(t.code));
-
-      const a = card.querySelector('[data-act="analysis"]');
-      if(a) a.addEventListener('click', ()=> openTgLink(t.analysisLink));
-
+        </div>`;
+      card.addEventListener('click', (e)=>{
+        const b = e.target.closest('button[data-act]');
+        if(!b) return;
+        const act = b.dataset.act;
+        if(act==='start') return startTest(t.code);
+        if(act==='res') return viewResults(t.code);
+        if(act==='video' && t.videoLink) return openSmartLink(t.videoLink);
+        if(act==='pdf' && t.pdfLink) return openSmartLink(t.pdfLink);
+        if(act==='analysis' && t.analysisLink) return openSmartLink(t.analysisLink);
+      });
       frag.appendChild(card);
     });
     box.appendChild(frag);
@@ -826,21 +844,34 @@
     if(mine){ dw.innerHTML = renderDetail(mine); __lastTgText = makeTgText(t, mine); }
     else { dw.innerHTML = '<div class="muted">O‘zingizning oxirgi urinish tafsilotlari ko‘rinmadi.</div>'; __lastTgText = ''; }
 
-    // NEW: Natijada ham tahlil tugmasi chiqsin
-    if(t.analysisLink){
-      const block = document.createElement('div');
-      block.className = 'card';
-      block.style.marginTop = '12px';
-      block.innerHTML = `
-        <div class="flex" style="flex-wrap:wrap">
-          <strong>Test tahlili</strong>
-          <div class="space"></div>
-          <button class="btn tg" id="btnOpenAnalysis">Test tahlilini ko‘ring</button>
-        </div>
-        <div class="muted" style="margin-top:8px;font-size:13px">Tahlil Telegram link orqali ochiladi.</div>
-      `;
-      dw.appendChild(block);
-      block.querySelector('#btnOpenAnalysis').addEventListener('click', ()=> openTgLink(t.analysisLink));
+    // NEW: Materiallar (video/pdf test oldidan ham bor, tahlil esa test yakunlanganda)
+    const mat = document.createElement('div');
+    mat.className = 'card';
+    mat.style.marginTop = '12px';
+
+    const showAnalysisBtn = !!(mine && t.analysisLink);
+    mat.innerHTML = `
+      <div class="flex" style="flex-wrap:wrap">
+        <strong>Materiallar</strong>
+        <div class="space"></div>
+        ${t.videoLink ? `<button class="btn video" id="btnResVideo">🎬 Video tahlil</button>` : ``}
+        ${t.pdfLink ? `<button class="btn pdf" id="btnResPdf">📄 PDF test</button>` : ``}
+        ${showAnalysisBtn ? `<button class="btn tg" id="btnResAnalysis">🧾 Test tahlili</button>` : ``}
+      </div>
+      <div class="muted" style="margin-top:8px;font-size:13px">
+        ${showAnalysisBtn ? 'Test tahlili tugmasi faqat test yakunlangandan keyin chiqadi.' : 'Test tahlili tugmasi test yakunlanganda chiqadi.'}
+      </div>
+    `;
+    dw.appendChild(mat);
+
+    if(t.videoLink){ mat.querySelector('#btnResVideo')?.addEventListener('click', ()=> openSmartLink(t.videoLink)); }
+    if(t.pdfLink){ mat.querySelector('#btnResPdf')?.addEventListener('click', ()=> openSmartLink(t.pdfLink)); }
+    if(showAnalysisBtn){
+      mat.querySelector('#btnResAnalysis')?.addEventListener('click', ()=>{
+        openSmartLink(t.analysisLink);
+        // tahlil ko‘rildi -> endi ro‘yxatda ham ko‘rsatamiz
+        markSeenAnalysis(t.code);
+      });
     }
   }
 
