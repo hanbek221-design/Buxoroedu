@@ -378,6 +378,15 @@ td b{font-weight: 950}
   30%{box-shadow:0 0 0 8px rgba(37,99,235,.18)}
   100%{box-shadow:0 0 0 0 rgba(37,99,235,.0)}
 }
+/* Rank line */
+.rankline{
+  margin-top:6px;
+  font-size: 12px;
+  color: rgba(15,23,42,.75);
+}
+.rankline b{color:#0f172a}
+
+#btnGuideBack{white-space:nowrap}
 
 </style>
 </head>
@@ -581,6 +590,7 @@ td b{font-weight: 950}
         <div>
           <div class="card-title" id="resTitle">Natijalar</div>
           <div class="hint">Reyting + tafsilot</div>
+          <div class="rankline" id="rankLine">—</div>
         </div>
         <div class="row" style="gap:8px">
           <button class="btn ghost" id="btnBack2" type="button">⬅️ Orqaga</button>
@@ -604,6 +614,7 @@ td b{font-weight: 950}
           <div class="modal-title" id="guideTitle">Natija nusxalandi</div>
           <div class="modal-sub">Telegram guruhga yuborish uchun quyidagilarni bajaring.</div>
         </div>
+        <button class="btn ghost" type="button" id="btnGuideBack">⬅️ Orqaga</button>
         <button class="btn ghost" type="button" id="btnGuideClose">Yopish</button>
       </div>
 
@@ -632,7 +643,7 @@ td b{font-weight: 950}
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-app.js";
 import {
   getFirestore, doc, getDoc, setDoc, deleteDoc,
-  collection, getDocs, query, where, writeBatch, limit
+  collection, getDocs, query, where, writeBatch, limit, onSnapshot
 } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-firestore.js";
 
 /* ===== FIREBASE CONFIG (sizning project) ===== */
@@ -680,6 +691,7 @@ const el = {
   fileBanner: $("fileBanner"),
   guideModal: $("guideModal"),
   guideText: $("guideText"),
+  btnGuideBack: $("btnGuideBack"),
   btnGuideClose: $("btnGuideClose"),
   btnGuideCopy: $("btnGuideCopy"),
   btnGuideOpen: $("btnGuideOpen"),
@@ -717,6 +729,7 @@ const el = {
   btnCopy: $("btnCopy"),
   leaderboardWrap: $("leaderboardWrap"),
   detailWrap: $("detailWrap"),
+  rankLine: $("rankLine"),
 };
 
 /* ===== Telegram WebApp integration ===== */
@@ -1004,38 +1017,18 @@ async function getStatsForCode(code, force=false){
   return arr;
 }
 
-/* ===== Temp results (12 soat) =====
-  - details: savol bo'yicha tafsilot (12 soatda o'chadi)
+/* ===== Results (doimiy) =====
+  - Har foydalanuvchi uchun shu test bo‘yicha oxirgi tafsilotli natija saqlanadi (o‘chmaydi).
+  - Admin ham doim ko‘ra oladi.
 */
-const TEMP_HOURS = 12;
-const TEMP_MS = TEMP_HOURS * 60 * 60 * 1000;
-
-async function upsertTempResult(rec){
+async function upsertResult(rec){
   const id = statId(rec.code, rec.login);
-  await setDoc(doc(db,"results_temp", id), rec);
+  await setDoc(doc(db,"results", id), rec);
 }
-
-async function getTempResult(code, login){
-  const snap = await getDoc(doc(db,"results_temp", statId(code, login)));
-  if(!snap.exists()) return null;
-  const d = snap.data();
-  if(d.expiresAt && d.expiresAt < Date.now()) return null;
-  return d;
+async function getResult(code, login){
+  const snap = await getDoc(doc(db,"results", statId(code, login)));
+  return snap.exists() ? snap.data() : null;
 }
-
-async function cleanupExpiredTemps(){
-  // Client-driven cleanup: kimdir kirganda eskirgan temp natijalarni tozalaydi
-  try{
-    const qs = await getDocs(query(collection(db,"results_temp"), where("expiresAt","<", Date.now()), limit(200)));
-    const refs=[]; qs.forEach(d=>refs.push(d.ref));
-    for(let i=0;i<refs.length;i+=450){
-      const batch = writeBatch(db);
-      refs.slice(i,i+450).forEach(r=>batch.delete(r));
-      await batch.commit();
-    }
-  }catch(_){}
-}
-
 /* ===== Delete test deeply ===== */
 async function batchDeleteSnap(snap){
   const refs=[]; snap.forEach(d=>refs.push(d.ref));
@@ -1046,10 +1039,10 @@ async function batchDeleteSnap(snap){
   }
 }
 async function deleteTestDeep(code){
-  // delete stats + temp + test doc
+  // delete stats + results + test doc
   const stSnap = await getDocs(query(collection(db,"stats"), where("code","==",code), limit(500)));
   await batchDeleteSnap(stSnap);
-  const tmpSnap = await getDocs(query(collection(db,"results_temp"), where("code","==",code), limit(500)));
+  const tmpSnap = await getDocs(query(collection(db,"results"), where("code","==",code), limit(500)));
   await batchDeleteSnap(tmpSnap);
   await deleteDoc(doc(db,"tests", code));
   CACHE.tests=null;
@@ -1063,6 +1056,8 @@ let FOCUS = 0;
 let LAST_COPY_TEXT = "";
 let CURRENT_TEST = null;
 let CURRENT_STATS = [];
+let UNSUB_STATS = null;
+let DETAIL_LOGIN = null;
 let MY_TEMP = null;
 
 function showOnly(section){
@@ -1162,7 +1157,12 @@ el.btnSaveTest.addEventListener("click", async ()=>{
   await renderAdmin();
 });
 
-el.btnAdminRefresh.addEventListener("click", ()=>renderAdmin(true));
+el.btnAdminRefresh.addEventListener("click", ()=>{
+  renderAdmin(true).catch(err=>{
+    console.error(err);
+    showToast("⚠️ Admin yangilanmadi. Internet/Firebase rules ni tekshiring.");
+  });
+});
 
 async function renderAdmin(force=false){
   const tests = await allTests(force);
@@ -1221,7 +1221,7 @@ async function renderAdmin(force=false){
       if(act === "sendTg"){
         // Admin: barcha natijalarni Telegramga yuborish (copy + chatga o‘tish)
         const test = (await allTests()).find(x=>x.code===t.code) || t;
-        const resArr = await getResults(t.code, 200);
+        const resArr = await getStatsForCode(t.code, true);
         const text = makeAllStatsText(test, resArr);
         await sendResultToTelegram(text);
         return;
@@ -1280,10 +1280,24 @@ el.btnUserLogin.addEventListener("click", async ()=>{
   SESSION = { role:"user", login:name };
   el.whoTag.textContent = name;
   try{ localStorage.setItem("tm_last_name", name); }catch(_){}
-  await renderUser(true);
+
+  // Avval ekranga o‘tamiz — keyin testlarni yuklaymiz (xato bo‘lsa ham ekran ochiq qoladi)
   showOnly("user");
   haptic("light");
+
+  try{
+    await renderUser(true);
+  }catch(err){
+    console.error(err);
+    el.testsList.innerHTML = `
+      <div class="item">
+        <div class="item-title">Testlar yuklanmadi</div>
+        <div class="item-meta">Internet/Firebase ruxsat (rules) yoki konfiguratsiyada muammo bo‘lishi mumkin. “Barcha testlar” ni qayta bosing yoki keyinroq urinib ko‘ring.</div>
+      </div>`;
+    showToast("⚠️ Testlarni yuklab bo‘lmadi. Hosting (https://) va Firestore rules ni tekshiring.");
+  }
 });
+
 
 el.userName.addEventListener("keydown", (e)=>{
   if(e.key === "Enter"){ e.preventDefault(); el.btnUserLogin.click(); }
@@ -1293,18 +1307,39 @@ el.userName.addEventListener("keydown", (e)=>{
 el.btnAdminLogin.addEventListener("click", async ()=>{
   const login = (el.adminLogin.value||"").trim();
   const code  = (el.adminCode.value||"").trim();
+
+  // Admin tekshiruvi (o'zingizga moslab o'zgartirasiz)
   if(login.toLowerCase()==="javohir00" && code==="jude857"){
     SESSION = { role:"admin", login:"ADMIN" };
+
     showOnly("admin");
-    await renderAdmin(true);
     haptic("light");
+
+    try{
+      await renderAdmin(true);
+    }catch(err){
+      console.error(err);
+      el.adminList.innerHTML = `
+        <div class="item">
+          <div class="item-title">Admin panel yuklanmadi</div>
+          <div class="item-meta">Firebase ruxsat (rules) yoki internet muammosi bo‘lishi mumkin. “Yangilash” ni bosing.</div>
+        </div>`;
+      showToast("⚠️ Admin maʼlumotlari yuklanmadi. Firestore rules ni tekshiring.");
+    }
     return;
   }
+
   showToast("Admin login yoki kod xato.");
 });
 
+
 /* ===== User: list / search ===== */
-el.btnShowAll.addEventListener("click", ()=>renderUser(true));
+el.btnShowAll.addEventListener("click", ()=>{
+  renderUser(true).catch(err=>{
+    console.error(err);
+    showToast("⚠️ Testlar yuklanmadi. Internet/Firebase rules ni tekshiring.");
+  });
+});
 el.btnClearSearch.addEventListener("click", ()=>{
   el.nameSearch.value = "";
   el.testsList.innerHTML = `<div class="item"><div class="item-title">Qidiruv tozalandi</div><div class="item-meta">“Barcha testlar” ni bosing.</div></div>`;
@@ -1515,7 +1550,7 @@ async function finishTest(){
 
   const wrong = PLAY.count - score;
 
-  // Old stat (attempts) — birinchi urinishni aniqlash uchun
+  // Old stat — birinchi urinishni aniqlash uchun
   const prev = await getStat(PLAY.code, SESSION.login);
   const prevAttempts = Number(prev.attempts||0);
 
@@ -1533,26 +1568,27 @@ async function finishTest(){
   };
   await saveStat(PLAY.code, SESSION.login, next);
 
-  // Temp details (12 soat)
-  const tempRec = {
+  // Result details (doimiy — o‘chmaydi)
+  const resultRec = {
     login: SESSION.login,
     code: PLAY.code,
-    score, total: PLAY.count,
+    attempt: prevAttempts + 1,
+    score,
+    total: PLAY.count,
     details,
-    date: Date.now(),
-    expiresAt: Date.now() + TEMP_MS
+    date: Date.now()
   };
-  await upsertTempResult(tempRec);
+  await upsertResult(resultRec);
 
   // Natijani ko'rsatish
-  await viewResults(PLAY.code, tempRec);
+  await viewResults(PLAY.code, resultRec);
   haptic("medium");
 
-  // 1-marta ishlaganda avtomatik Telegramga yuborish (copy + linkga o'tish)
+  // 1-marta ishlaganda: avtomatik nusxa + guruhni ochish (yuborish emas)
   if(prevAttempts === 0){
     const tests = await allTests();
     const t = tests.find(x=>x.code===PLAY.code) || CURRENT_TEST || {name:"Test", code:PLAY.code, count: PLAY.count};
-    const share = makeCopyText(t, tempRec);
+    const share = makeCopyText(t, resultRec);
     await copyToClipboard(share);
     showToast("✅ Natijangiz nusxalandi. Telegram guruh ochilmoqda...");
     openGuideModal(share, true);
@@ -1587,23 +1623,154 @@ function makeCopyText(test, rec){
   return lines.join("\n");
 }
 
-function renderMyDetail(rec){
-  let html = `<div class="item"><div class="item-title">${esc(rec.login)} — ${rec.score}/${rec.total} (${pct(rec)}%)</div>`;
-  html += `<div class="item-meta" style="margin-top:6px">Tafsilotlar</div>`;
-  html += `<div class="tablewrap" style="margin-top:10px">
-    <table>
-      <thead><tr><th>#</th><th>Tanlangan</th><th>To‘g‘ri</th><th>Holat</th></tr></thead>
-      <tbody>
-        ${rec.details.map(d=>`<tr><td>${d.q}</td><td>${esc(d.chosen)}</td><td>${esc(d.correct)}</td><td>${d.ok ? "✅" : "❌"}</td></tr>`).join("")}
-      </tbody>
-    </table>
-  </div></div>`;
+function renderMyDetail(rec, isOther=false){
+  const score = Number(rec.score||0);
+  const total = Number(rec.total||0);
+  const wrong = total - score;
+  const acc = total ? Math.round((score/total)*100) : 0;
+
+  const who = isOther ? `<div class="pill">👤 ${esc(rec.login||"")}</div>` : `<div class="pill ok">👤 Siz</div>`;
+  const when = rec.date ? new Date(rec.date).toLocaleString() : "-";
+
+  let html = `
+    <div class="item">
+      <div class="row between" style="gap:10px;flex-wrap:wrap">
+        <div class="item-title">Natija tafsiloti</div>
+        <div class="row" style="gap:8px;flex-wrap:wrap">
+          ${who}
+          <div class="pill">${acc}%</div>
+          <div class="pill">🕒 ${when}</div>
+        </div>
+      </div>
+      <div class="kpis">
+        <div class="kpi"><div class="k">✅ To‘g‘ri</div><div class="v">${score}</div></div>
+        <div class="kpi"><div class="k">❌ Xato</div><div class="v">${wrong}</div></div>
+        <div class="kpi"><div class="k">📝 Jami</div><div class="v">${total}</div></div>
+      </div>
+    </div>
+  `;
+
+  if(Array.isArray(rec.details) && rec.details.length){
+    html += `<div class="item"><div class="item-title">Savolma-savol</div><div class="item-meta">✅ yashil — to‘g‘ri, ❌ qizil — xato</div><div class="grid">`;
+    rec.details.forEach(d=>{
+      const ok = !!d.ok;
+      html += `<div class="qrow ${ok?"ok":"bad"}">
+        <div class="qnum">#${d.q}</div>
+        <div class="qans">
+          <span class="tag ${ok?"ok":"bad"}">${ok?"✅":"❌"}</span>
+          <span class="tag">Siz: <b>${esc(d.chosen||"-")}</b></span>
+          <span class="tag">To‘g‘ri: <b>${esc(d.correct||"-")}</b></span>
+        </div>
+      </div>`;
+    });
+    html += `</div></div>`;
+  }
   return html;
 }
 
-async function viewResults(code, justMade=null){
-  await cleanupExpiredTemps();
 
+function sortStats(arr){
+  // Ranking: correctTotal desc, then attempts asc, then name
+  arr.sort((a,b)=>
+    (Number(b.correctTotal||0)-Number(a.correctTotal||0)) ||
+    (Number(a.attempts||0)-Number(b.attempts||0)) ||
+    (String(a.login||"").localeCompare(String(b.login||"")))
+  );
+  return arr;
+}
+
+function renderLeaderboard(statsArr){
+  const isAdmin = SESSION?.role === "admin";
+  const maskName = (s)=>{
+    s = String(s||"");
+    if(isAdmin) return esc(s);
+    if(SESSION?.login && s === SESSION.login) return `<b>${esc(s)}</b>`;
+    if(s.length<=2) return esc(s[0]||"") + "*";
+    return esc(s[0]) + "•••" + esc(s[s.length-1]);
+  };
+
+  if(!statsArr.length){
+    el.leaderboardWrap.innerHTML = `<div class="item"><div class="item-title">Natijalar yo‘q</div><div class="item-meta">Hali hech kim ishlamagan.</div></div>`;
+    if(el.rankLine) el.rankLine.innerHTML = "—";
+    return;
+  }
+
+  // Rank line
+  if(el.rankLine && SESSION?.login){
+    const idx = statsArr.findIndex(r=>String(r.login)===String(SESSION.login));
+    if(idx>=0){
+      const me = statsArr[idx];
+      el.rankLine.innerHTML = `Sizning o‘rningiz: <b>#${idx+1}</b> / ${statsArr.length} • Oxirgi: <b>${me.lastScore||0}/${me.lastTotal||0}</b>`;
+    }else{
+      el.rankLine.innerHTML = `Ishtirokchilar: <b>${statsArr.length}</b> ta`;
+    }
+  }else if(el.rankLine){
+    el.rankLine.innerHTML = `Ishtirokchilar: <b>${statsArr.length}</b> ta`;
+  }
+
+  let h = `<table><thead><tr>
+    <th>#</th><th>Ism</th><th>Urinish</th><th>✅ To‘g‘ri</th><th>❌ Xato</th><th>📈 Aniqlik</th>${isAdmin?'<th>Oxirgi</th>':""}
+  </tr></thead><tbody>`;
+
+  statsArr.slice(0, 250).forEach((r,i)=>{
+    const mine = SESSION?.login && String(r.login) === String(SESSION.login);
+    const total = (Number(r.correctTotal||0)+Number(r.wrongTotal||0));
+    const acc = total ? Math.round((Number(r.correctTotal||0)/total)*100) : 0;
+    const badge = i===0 ? "🥇" : i===1 ? "🥈" : i===2 ? "🥉" : "";
+    h += `<tr class="${mine?"my-row":""}" data-login="${esc(String(r.login||""))}">
+      <td><b>${badge} ${i+1}</b></td>
+      <td>${maskName(r.login)}</td>
+      <td><b>${Number(r.attempts||0)}</b></td>
+      <td><b>${Number(r.correctTotal||0)}</b></td>
+      <td><b>${Number(r.wrongTotal||0)}</b></td>
+      <td>${acc}%</td>
+      ${isAdmin?`<td>${r.lastDate ? new Date(r.lastDate).toLocaleString() : "-"}</td>`:""}
+    </tr>`;
+  });
+
+  h += `</tbody></table>`;
+  el.leaderboardWrap.innerHTML = h;
+
+  // Admin: click row -> open that user's detailed result
+  if(isAdmin){
+    el.leaderboardWrap.onclick = async (e)=>{
+      const tr = e.target?.closest("tr[data-login]");
+      if(!tr) return;
+      const login = tr.getAttribute("data-login");
+      if(!login) return;
+      DETAIL_LOGIN = login;
+      const rec = await getResult(CURRENT_TEST.code, login);
+      if(!rec){
+        showToast("Bu foydalanuvchining tafsiloti topilmadi.");
+        return;
+      }
+      el.detailWrap.innerHTML = renderMyDetail(rec, true);
+      LAST_COPY_TEXT = makeCopyText(CURRENT_TEST, rec);
+      showToast(`👁️ ${login} natijasi ochildi.`);
+      haptic("light");
+    };
+  }else{
+    el.leaderboardWrap.onclick = null;
+  }
+}
+
+function subscribeStats(code){
+  try{ UNSUB_STATS?.(); }catch(_){}
+  UNSUB_STATS = null;
+
+  const q = query(collection(db,"stats"), where("code","==",code), limit(500));
+  UNSUB_STATS = onSnapshot(q, (snap)=>{
+    const arr=[]; snap.forEach(d=>arr.push(d.data()));
+    sortStats(arr);
+    CURRENT_STATS = arr;
+    renderLeaderboard(arr);
+  }, (err)=>{
+    console.warn(err);
+    showToast("⚠️ Reytingni yangilashda xato. Internetni tekshiring.");
+  });
+}
+
+async function viewResults(code, justMade=null){
   const tests = await allTests();
   const t = tests.find(x=>x.code===code);
   if(!t) return showToast("Test topilmadi.");
@@ -1612,54 +1779,27 @@ async function viewResults(code, justMade=null){
   el.resTitle.textContent = `${t.name} — Natijalar`;
   showOnly("results");
 
-  // Leaderboard: stats (saqlanadigan)
-  const statsArr = await getStatsForCode(code, true);
-  CURRENT_STATS = statsArr;
+  // Live leaderboard (real time)
+  subscribeStats(code);
 
-  if(!statsArr.length){
-    el.leaderboardWrap.innerHTML = `<div class="item"><div class="item-title">Natijalar yo‘q</div><div class="item-meta">Hali hech kim ishlamagan.</div></div>`;
-  }else{
-    let h = `<table><thead><tr>
-      <th>#</th><th>Ism</th><th>Urinish</th><th>✅ To‘g‘ri</th><th>❌ Xato</th><th>📈 Aniqlik</th><th>Oxirgi</th>
-    </tr></thead><tbody>`;
-    statsArr.slice(0, 200).forEach((r,i)=>{
-      const mine = SESSION.login && String(r.login) === String(SESSION.login);
-      const total = (Number(r.correctTotal||0)+Number(r.wrongTotal||0));
-      const acc = total ? Math.round((Number(r.correctTotal||0)/total)*100) : 0;
-      const badge = i===0 ? "🥇" : i===1 ? "🥈" : i===2 ? "🥉" : "";
-      h += `<tr class="${mine?"my-row":""}">
-        <td><b>${badge} ${i+1}</b></td>
-        <td>${maskName(r.login)}</td>
-        <td><b>${Number(r.attempts||0)}</b></td>
-        <td><b>${Number(r.correctTotal||0)}</b></td>
-        <td><b>${Number(r.wrongTotal||0)}</b></td>
-        <td>${acc}%</td>
-        <td>${r.lastDate ? new Date(r.lastDate).toLocaleString() : "-"}</td>
-      </tr>`;
-    });
-    h += `</tbody></table>`;
-    el.leaderboardWrap.innerHTML = h;
-  }
-
-  // My detail: show temp details (12 soat) bo'lsa
-  let mineTemp = null;
+  // Detail: user sees own; admin sees own by default, can click row for others
+  let rec = null;
   if(SESSION.login){
-    mineTemp = justMade || await getTempResult(code, SESSION.login);
+    rec = justMade || await getResult(code, SESSION.login);
   }
-  MY_TEMP = mineTemp;
 
-  if(mineTemp){
-    el.detailWrap.innerHTML = renderMyDetail(mineTemp);
-    LAST_COPY_TEXT = makeCopyText(t, mineTemp);
+  if(rec){
+    el.detailWrap.innerHTML = renderMyDetail(rec, false);
+    LAST_COPY_TEXT = makeCopyText(t, rec);
   }else{
     el.detailWrap.innerHTML = `<div class="item">
       <div class="item-title">Tafsilotlar yo‘q</div>
-      <div class="item-meta">Savollar bo‘yicha tafsilotlar 12 soatdan keyin o‘chiriladi. Reytingda esa faqat urinishlar va jami to‘g‘ri/xato saqlanadi.</div>
+      <div class="item-meta">Siz hali bu testni ishlamagansiz yoki natija saqlanmagan.</div>
     </div>`;
     LAST_COPY_TEXT = "";
   }
 
-  // Materiallar: Video/PDF har doim; Tahlil link bo'lsa har doim ko'rinsin
+  // Materiallar
   const mats = [];
   if(t.videoLink) mats.push({k:"video", text:"🎬 Video tahlil", url:t.videoLink});
   if(t.pdfLink) mats.push({k:"pdf", text:"📄 PDF test", url:t.pdfLink});
@@ -1686,11 +1826,11 @@ async function viewResults(code, justMade=null){
       setTimeout(()=>chip.classList.remove("flash"), 950);
 
       if(k === "video"){
-        showToast(`🎬 Video ochildi. Bu video aynan shu test tahliliga tegishli. Agar topilmasa: test nomi yoki kodini (${CURRENT_TEST?.code||""}) eslab, Telegram qidiruviga yozib qidiring.`);
+        showToast(`🎬 Video ochildi. Bu video aynan shu test tahliliga tegishli. Topilmasa: test nomi yoki kodini (${CURRENT_TEST?.code||""}) Telegram qidiruviga yozib qidiring.`);
       }else if(k === "pdf"){
         showToast("📄 PDF ochildi. Bu fayl shu test uchun. Ochilmasa — internetingizni tekshiring va qayta urining.");
       }else if(k === "analysis"){
-        showToast("🧾 Tahlil ochildi. Bu sahifa shu testga tegishli. Tahlilni ko‘rib bo‘lgach, Orqaga qaytib testni davom ettirishingiz mumkin.");
+        showToast("🧾 Tahlil ochildi. Bu sahifa shu testga tegishli. Ko‘rib bo‘lgach, Orqaga qayting.");
       }
 
       openAnyLink(m.url);
@@ -1713,10 +1853,18 @@ el.btnCopy.addEventListener("click", async ()=>{
 });
 
 el.btnSendTg?.addEventListener("click", async ()=>{
-  let text = LAST_COPY_TEXT;
-  if(!text && CURRENT_TEST){
-    text = makeAllStatsText(CURRENT_TEST, CURRENT_STATS || []);
+  if(SESSION.role === "admin"){
+    if(!CURRENT_TEST) return showToast("Test tanlang.");
+    const text = makeAllStatsText(CURRENT_TEST, CURRENT_STATS || []);
+    await sendResultToTelegram(text);
+    return;
   }
+  let text = LAST_COPY_TEXT;
+  if(!text && CURRENT_TEST && SESSION.login){
+    const rec = await getResult(CURRENT_TEST.code, SESSION.login);
+    if(rec) text = makeCopyText(CURRENT_TEST, rec);
+  }
+  if(!text) return showToast("Avval testni yakunlang.");
   await sendResultToTelegram(text);
 });
 
@@ -1754,6 +1902,7 @@ function closeGuideModal(){
   el.guideModal?.classList.add("hidden");
 }
 
+el.btnGuideBack?.addEventListener("click", closeGuideModal);
 el.btnGuideClose?.addEventListener("click", closeGuideModal);
 el.guideModal?.addEventListener("click", (e)=>{
   const a = e.target?.closest("[data-act='closeGuide']");
@@ -1769,6 +1918,21 @@ el.btnGuideOpen?.addEventListener("click", ()=>{
   openTelegram(REPORT_LINK);
   showToast("📨 Telegram ochildi. Endi bo‘sh joyni bosib turib “Paste / Вставить” ni tanlang va yuboring.");
   haptic("light");
+});
+
+
+/* ===== Global error guard ===== */
+window.addEventListener("error", (e)=>{
+  try{
+    const msg = (e?.message || "Xatolik");
+    showToast("❌ Xatolik: " + msg);
+  }catch(_){}
+});
+window.addEventListener("unhandledrejection", (e)=>{
+  try{
+    const msg = (e?.reason?.message || e?.reason || "Xatolik");
+    showToast("❌ Xatolik: " + msg);
+  }catch(_){}
 });
 
 /* ===== Boot ===== */
