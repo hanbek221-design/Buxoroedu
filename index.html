@@ -722,9 +722,27 @@ async function copyToClipboard(text){
 // Bu tugma sizga eng qulay yo‘l: Copy + Telegramga o'tish.
 async function sendResultToTelegram(text){
   if(!text) return showToast("Avval natija chiqsin.");
-  await copyToClipboard(text);
-  showToast("✅ Nusxa olindi. Telegramda paste qilib yuboring.");
-  openAnyLink(REPORT_LINK);
+
+  // Xabar oxiriga guruh linkini ham qo‘shamiz (admin o‘zgartirsa ham shu qo‘shiladi)
+  const fullText = `${text}
+
+📌 Guruh/kanal: ${REPORT_LINK}`;
+
+  // 1) Telegram share oynasini ochamiz (matn avtomatik yozilgan bo‘ladi)
+  const share = new URL("https://t.me/share/url");
+  share.searchParams.set("text", fullText);
+
+  // 2) Nusxalab ham qo‘yamiz (agar share ishlamasa ham yo‘qolib ketmasin)
+  await copyToClipboard(fullText);
+
+  try{
+    if(tg?.openTelegramLink) tg.openTelegramLink(share.toString());
+    else openAnyLink(share.toString());
+    showToast("✅ Telegram oynasi ochildi. Faqat yuborishni bosing.");
+  }catch(_){
+    showToast("✅ Nusxa olindi. Telegramga kirib paste qilib yuboring.");
+    openAnyLink(REPORT_LINK);
+  }
   haptic("light");
 }
 
