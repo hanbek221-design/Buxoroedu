@@ -359,6 +359,26 @@ body.tg{
 tbody tr:hover{background: rgba(2,6,23,.025)}
 td b{font-weight: 950}
 .my-row{background: rgba(37,99,235,.08)!important}
+/* Banner */
+.banner{
+  background: rgba(245,158,11,.10);
+  border: 1px solid rgba(245,158,11,.25);
+  color: #0f172a;
+  padding: 10px 12px;
+  border-radius: 14px;
+  margin: 10px 0 14px;
+}
+.banner-actions{margin-top:6px;color:rgba(15,23,42,.78);font-size:12px}
+
+#guideText{resize:vertical;min-height:140px;font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace}
+/* Material flash */
+.chip.flash{animation: flashGlow 900ms ease-out 1}
+@keyframes flashGlow{
+  0%{box-shadow:0 0 0 0 rgba(37,99,235,.0)}
+  30%{box-shadow:0 0 0 8px rgba(37,99,235,.18)}
+  100%{box-shadow:0 0 0 0 rgba(37,99,235,.0)}
+}
+
 </style>
 </head>
 <body>
@@ -378,6 +398,14 @@ td b{font-weight: 950}
   </header>
 
   <main class="wrap">
+
+    <div class="banner hidden" id="fileBanner">
+      <b>Diqqat:</b> Siz faylni kompyuterdan <code>file:///</code> orqali ochgansiz. Bu holatda Firebase/Telegram WebApp to‘liq ishlamaydi.
+      <div class="banner-actions">
+        <span>Yechim: GitHub Pages (https://...) ga joylang yoki “Live Server” bilan oching.</span>
+      </div>
+    </div>
+
     <!-- AUTH -->
     <section class="grid" id="authGrid">
       <div class="card">
@@ -566,7 +594,37 @@ td b{font-weight: 950}
     </section>
 
     <div class="toast" id="toast"></div>
-  </main>
+  
+  <!-- Clipboard guide modal -->
+  <div class="modal hidden" id="guideModal" role="dialog" aria-modal="true" aria-labelledby="guideTitle">
+    <div class="modal-backdrop" data-act="closeGuide"></div>
+    <div class="modal-card">
+      <div class="modal-head">
+        <div>
+          <div class="modal-title" id="guideTitle">Natija nusxalandi</div>
+          <div class="modal-sub">Telegram guruhga yuborish uchun quyidagilarni bajaring.</div>
+        </div>
+        <button class="btn ghost" type="button" id="btnGuideClose">Yopish</button>
+      </div>
+
+      <div class="note">
+        1) Telegram guruhingiz ochiladi (yoki o‘zingiz ochasiz).<br/>
+        2) Xabar yozish oynasidagi bo‘sh joyni <b>bosib turing</b>.<br/>
+        3) <b>“Paste / Вставить”</b> ni tanlang.<br/>
+        4) <b>Yuboring</b> — natija guruhda paydo bo‘ladi.
+      </div>
+
+      <label style="margin-top:10px">Nusxalangan matn</label>
+      <textarea id="guideText" rows="7" style="width:100%"></textarea>
+
+      <div class="row end" style="margin-top:12px;gap:10px;flex-wrap:wrap">
+        <button class="btn" type="button" id="btnGuideCopy">📋 Qayta nusxa olish</button>
+        <button class="btn primary" type="button" id="btnGuideOpen">📨 Telegramni ochish</button>
+      </div>
+    </div>
+  </div>
+
+</main>
   <script type="module">
 // TestMaster — Telegram WebApp Ready (Video/PDF/Analysis links)
 // Firebase: 10.12.3 (module CDN)
@@ -618,6 +676,13 @@ const el = {
   reportLinkInput: $("reportLinkInput"),
   btnReportLinkSave: $("btnReportLinkSave"),
   btnReportLinkCancel: $("btnReportLinkCancel"),
+
+  fileBanner: $("fileBanner"),
+  guideModal: $("guideModal"),
+  guideText: $("guideText"),
+  btnGuideClose: $("btnGuideClose"),
+  btnGuideCopy: $("btnGuideCopy"),
+  btnGuideOpen: $("btnGuideOpen"),
 
   tName: $("tName"),
   tCode: $("tCode"),
@@ -722,27 +787,14 @@ async function copyToClipboard(text){
 // Bu tugma sizga eng qulay yo‘l: Copy + Telegramga o'tish.
 async function sendResultToTelegram(text){
   if(!text) return showToast("Avval natija chiqsin.");
+  const fullText = text;
 
-  // Xabar oxiriga guruh linkini ham qo‘shamiz (admin o‘zgartirsa ham shu qo‘shiladi)
-  const fullText = `${text}
-
-📌 Guruh/kanal: ${REPORT_LINK}`;
-
-  // 1) Telegram share oynasini ochamiz (matn avtomatik yozilgan bo‘ladi)
-  const share = new URL("https://t.me/share/url");
-  share.searchParams.set("text", fullText);
-
-  // 2) Nusxalab ham qo‘yamiz (agar share ishlamasa ham yo‘qolib ketmasin)
+  // 1) Clipboardga nusxalaymiz
   await copyToClipboard(fullText);
 
-  try{
-    if(tg?.openTelegramLink) tg.openTelegramLink(share.toString());
-    else openAnyLink(share.toString());
-    showToast("✅ Telegram oynasi ochildi. Faqat yuborishni bosing.");
-  }catch(_){
-    showToast("✅ Nusxa olindi. Telegramga kirib paste qilib yuboring.");
-    openAnyLink(REPORT_LINK);
-  }
+  // 2) Ko‘rsatma beramiz va Telegram guruh linkini ochamiz
+  showToast("✅ Natijangiz nusxalandi. Telegramga yuborish uchun ko‘rsatmalar chiqdi.");
+  openGuideModal(fullText, true);
   haptic("light");
 }
 
@@ -784,6 +836,17 @@ function openAnyLink(url){
     }
   }
   window.open(u, "_blank", "noopener,noreferrer");
+}
+
+
+function openTelegram(url){
+  try{
+    if(tg?.openTelegramLink){ tg.openTelegramLink(url); return true; }
+    if(tg?.openLink){ tg.openLink(url); return true; }
+    openAnyLink(url); return true;
+  }catch(_){
+    try{ openAnyLink(url); return true; }catch(__){ return false; }
+  }
 }
 
 /* ===== Telegram Report Link (admin can change) ===== */
@@ -1490,7 +1553,9 @@ async function finishTest(){
     const tests = await allTests();
     const t = tests.find(x=>x.code===PLAY.code) || CURRENT_TEST || {name:"Test", code:PLAY.code, count: PLAY.count};
     const share = makeCopyText(t, tempRec);
-    await sendResultToTelegram(share);
+    await copyToClipboard(share);
+    showToast("✅ Natijangiz nusxalandi. Telegram guruh ochilmoqda...");
+    openGuideModal(share, true);
   }
 }
 /* ===== Results ===== */
@@ -1564,7 +1629,7 @@ async function viewResults(code, justMade=null){
       const badge = i===0 ? "🥇" : i===1 ? "🥈" : i===2 ? "🥉" : "";
       h += `<tr class="${mine?"my-row":""}">
         <td><b>${badge} ${i+1}</b></td>
-        <td>${esc(r.login)}</td>
+        <td>${maskName(r.login)}</td>
         <td><b>${Number(r.attempts||0)}</b></td>
         <td><b>${Number(r.correctTotal||0)}</b></td>
         <td><b>${Number(r.wrongTotal||0)}</b></td>
@@ -1616,6 +1681,18 @@ async function viewResults(code, justMade=null){
       const k = chip.dataset.k;
       const m = mats.find(x=>x.k===k);
       if(!m) return;
+
+      chip.classList.add("flash");
+      setTimeout(()=>chip.classList.remove("flash"), 950);
+
+      if(k === "video"){
+        showToast(`🎬 Video ochildi. Bu video aynan shu test tahliliga tegishli. Agar topilmasa: test nomi yoki kodini (${CURRENT_TEST?.code||""}) eslab, Telegram qidiruviga yozib qidiring.`);
+      }else if(k === "pdf"){
+        showToast("📄 PDF ochildi. Bu fayl shu test uchun. Ochilmasa — internetingizni tekshiring va qayta urining.");
+      }else if(k === "analysis"){
+        showToast("🧾 Tahlil ochildi. Bu sahifa shu testga tegishli. Tahlilni ko‘rib bo‘lgach, Orqaga qaytib testni davom ettirishingiz mumkin.");
+      }
+
       openAnyLink(m.url);
       haptic("light");
     });
@@ -1626,12 +1703,12 @@ async function viewResults(code, justMade=null){
 el.btnCopy.addEventListener("click", async ()=>{
   let text = LAST_COPY_TEXT;
   if(!text && CURRENT_TEST){
-    // Admin yoki foydalanuvchi natijasi topilmasa, umumiy ro‘yxatni nusxalaymiz
     text = makeAllStatsText(CURRENT_TEST, CURRENT_STATS || []);
   }
   if(!text) return showToast("Avval natija chiqsin.");
-  const ok = await copyToClipboard(text);
-  showToast(ok ? "✅ Nusxa olindi." : "✅ Nusxa olish oynasi ochildi.");
+  await copyToClipboard(text);
+  showToast("✅ Natijangiz nusxalandi. Endi istagan joyga “Paste / Вставить” qilib yuboring.");
+  openGuideModal(text, false);
   haptic("light");
 });
 
@@ -1657,8 +1734,52 @@ async function copyAdminReport(code){
   showToast(ok ? "✅ Hisobot nusxasi olindi." : "✅ Nusxa olish oynasi ochildi.");
 }
 
+
+/* ===== Clipboard guide ===== */
+let LAST_GUIDE_TEXT = "";
+
+function openGuideModal(text, openChat=false){
+  LAST_GUIDE_TEXT = text || "";
+  if(el.guideText) el.guideText.value = LAST_GUIDE_TEXT;
+
+  el.guideModal?.classList.remove("hidden");
+
+  if(openChat){
+    // Telegram guruh linkini ochishga urinib ko‘ramiz
+    openTelegram(REPORT_LINK);
+  }
+}
+
+function closeGuideModal(){
+  el.guideModal?.classList.add("hidden");
+}
+
+el.btnGuideClose?.addEventListener("click", closeGuideModal);
+el.guideModal?.addEventListener("click", (e)=>{
+  const a = e.target?.closest("[data-act='closeGuide']");
+  if(a) closeGuideModal();
+});
+el.btnGuideCopy?.addEventListener("click", async ()=>{
+  if(!LAST_GUIDE_TEXT) return;
+  await copyToClipboard(LAST_GUIDE_TEXT);
+  showToast("✅ Natija qayta nusxalandi.");
+  haptic("light");
+});
+el.btnGuideOpen?.addEventListener("click", ()=>{
+  openTelegram(REPORT_LINK);
+  showToast("📨 Telegram ochildi. Endi bo‘sh joyni bosib turib “Paste / Вставить” ni tanlang va yuboring.");
+  haptic("light");
+});
+
 /* ===== Boot ===== */
 (function boot(){
+
+  // file:// orqali ochilsa Firebase/Telegram to‘liq ishlamaydi
+  if(location.protocol === "file:"){
+    el.fileBanner?.classList.remove("hidden");
+    showToast("⚠️ Saytni file:/// orqali ochmang. GitHub Pages (https://...) ga joylang yoki Live Server bilan oching.");
+  }
+
   try{
     const last = localStorage.getItem("tm_last_name");
     if(last) el.userName.value = last;
