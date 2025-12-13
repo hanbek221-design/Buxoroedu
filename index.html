@@ -210,44 +210,58 @@ input:disabled{
 .qn{font-weight:900}
 .pad{display:flex;gap:10px;flex-wrap:wrap}
 
-/* Variant buttons (rangli) */
+/* Variant buttons (rangli) — kontrast kuchli */
 .opt{
-  width:84px;height:48px;
-  border-radius: 14px;
-  border: 1px solid rgba(15,23,42,.14);
+  width:90px;height:52px;
+  border-radius: 16px;
+  border: 2px solid rgba(15,23,42,.14);
   background: rgba(15,23,42,.02);
   cursor:pointer;
   display:flex;align-items:center;justify-content:center;
   font-weight: 950;
   letter-spacing:.2px;
-  transition: transform .12s, box-shadow .12s, border-color .12s, background-color .12s;
+  color: #0f172a;
+  transition: transform .12s, box-shadow .12s, border-color .12s, background-color .12s, color .12s;
   --c: 37, 99, 235; /* default */
+  position: relative;
+  user-select: none;
 }
 .opt:hover{
   transform: translateY(-1px);
-  box-shadow: 0 12px 22px rgba(2,6,23,.10);
+  box-shadow: 0 12px 22px rgba(2,6,23,.12);
 }
 .opt:active{transform: translateY(0px) scale(.99)}
 
-/* Base tint per option */
-.opt[data-v="A"]{ --c: 37, 99, 235; background: rgba(var(--c), .08); border-color: rgba(var(--c), .22); }
-.opt[data-v="B"]{ --c: 34, 197, 94; background: rgba(var(--c), .08); border-color: rgba(var(--c), .22); }
-.opt[data-v="C"]{ --c: 245, 158, 11; background: rgba(var(--c), .10); border-color: rgba(var(--c), .24); }
-.opt[data-v="D"]{ --c: 236, 72, 153; background: rgba(var(--c), .08); border-color: rgba(var(--c), .22); }
+/* Base tint per option — oq fon ichida ham aniq ko‘rinsin */
+.opt[data-v="A"]{ --c: 37, 99, 235; background: rgba(var(--c), .16); border-color: rgba(var(--c), .42); }
+.opt[data-v="B"]{ --c: 34, 197, 94; background: rgba(var(--c), .16); border-color: rgba(var(--c), .42); }
+.opt[data-v="C"]{ --c: 245, 158, 11; background: rgba(var(--c), .18); border-color: rgba(var(--c), .46); }
+.opt[data-v="D"]{ --c: 236, 72, 153; background: rgba(var(--c), .16); border-color: rgba(var(--c), .42); }
 
 /* Selected — admin */
 .opt.admin-on{
-  background: rgba(var(--c), .20);
-  border-color: rgba(var(--c), .55);
-  box-shadow: 0 0 0 4px rgba(var(--c), .14);
+  background: rgba(var(--c), .26);
+  border-color: rgba(var(--c), .75);
+  box-shadow: 0 0 0 5px rgba(var(--c), .18);
 }
 
-/* Selected — user */
+/* Selected — user (yanada kuchli) */
 .opt.user-on{
-  background: rgba(var(--c), .22);
-  border-color: rgba(var(--c), .65);
-  box-shadow: 0 0 0 5px rgba(var(--c), .16);
+  background: rgba(var(--c), .90);
+  border-color: rgba(var(--c), 1);
+  color: #ffffff;
+  box-shadow: 0 0 0 6px rgba(var(--c), .22), 0 18px 36px rgba(2,6,23,.10);
 }
+.opt.user-on::after{
+  content: "✓";
+  position: absolute;
+  right: 10px;
+  top: 8px;
+  font-size: 14px;
+  font-weight: 900;
+  opacity: .95;
+}
+
 /* Lists */
 .list{display:flex;flex-direction:column;gap:12px}
 .item{
@@ -297,7 +311,7 @@ tr:last-child td{border-bottom:none}
 
 /* Play */
 .play{display:flex;flex-direction:column;gap:10px}
-.focus{outline: 3px solid rgba(37,99,235,.14); box-shadow: 0 0 0 6px rgba(37,99,235,.08)}
+.focus{outline: 3px solid rgba(37,99,235,.22); box-shadow: 0 0 0 8px rgba(37,99,235,.10)}
 .hidden{display:none!important}
 
 /* Toast */
@@ -345,7 +359,6 @@ body.tg{
 tbody tr:hover{background: rgba(2,6,23,.025)}
 td b{font-weight: 950}
 .my-row{background: rgba(37,99,235,.08)!important}
-
 </style>
 </head>
 <body>
