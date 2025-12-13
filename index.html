@@ -318,6 +318,23 @@ tr:last-child td{border-bottom:none}
 }
 .toast.show{opacity:1}
 
+
+/* Modal */
+.modal{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:50;padding:14px}
+.modal-backdrop{position:absolute;inset:0;background:rgba(2,6,23,.45);backdrop-filter: blur(2px)}
+.modal-card{
+  position:relative;
+  width:min(620px, calc(100vw - 18px));
+  border-radius: 18px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  padding: 14px;
+}
+.modal-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:8px}
+.modal-title{font-weight:950;font-size:16px}
+.modal-sub{color:var(--muted);font-size:12px;margin-top:2px}
+
 /* Telegram theme syncing (optional) */
 body.tg{
   background: var(--tg-bg);
@@ -405,6 +422,7 @@ body.tg{
         </div>
         <div class="row" style="gap:8px">
           <button class="btn" id="btnAdminRefresh" type="button">Yangilash</button>
+          <button class="btn" id="btnReportLinkOpen" type="button">Yuborish linki</button>
           <button class="btn ghost" id="btnLogoutAdmin" type="button">Chiqish</button>
         </div>
       </div>
@@ -575,7 +593,13 @@ const el = {
   btnAdminLogin: $("btnAdminLogin"),
 
   btnAdminRefresh: $("btnAdminRefresh"),
+  btnReportLinkOpen: $("btnReportLinkOpen"),
   btnLogoutAdmin: $("btnLogoutAdmin"),
+
+  reportLinkModal: $("reportLinkModal"),
+  reportLinkInput: $("reportLinkInput"),
+  btnReportLinkSave: $("btnReportLinkSave"),
+  btnReportLinkCancel: $("btnReportLinkCancel"),
 
   tName: $("tName"),
   tCode: $("tCode"),
@@ -616,7 +640,7 @@ const el = {
 const tg = window.Telegram?.WebApp;
 
 // Telegram natijalar yuboriladigan chat/post linki (siz bergan)
-const TG_REPORT_LINK = "https://t.me/c/3086001686/18";
+let REPORT_LINK = "https://t.me/c/3086001686/18";
 
 function tgInit(){
   if (!tg) return;
@@ -682,7 +706,7 @@ async function sendResultToTelegram(text){
   if(!text) return showToast("Avval natija chiqsin.");
   await copyToClipboard(text);
   showToast("✅ Nusxa olindi. Telegramda paste qilib yuboring.");
-  openAnyLink(TG_REPORT_LINK);
+  openAnyLink(REPORT_LINK);
   haptic("light");
 }
 
@@ -725,6 +749,84 @@ function openAnyLink(url){
   }
   window.open(u, "_blank", "noopener,noreferrer");
 }
+
+/* ===== Telegram Report Link (admin can change) ===== */
+const SETTINGS_DOC = doc(db, "settings", "app");
+const LS_REPORT_KEY = "tm_report_link";
+
+function getLocalReportLink(){
+  try{ return (localStorage.getItem(LS_REPORT_KEY) || "").trim(); }catch(_){ return ""; }
+}
+function setLocalReportLink(v){
+  try{ localStorage.setItem(LS_REPORT_KEY, v); }catch(_){}
+}
+
+async function loadReportLink(){
+  // 1) fast local
+  const local = normalizeUrl(getLocalReportLink());
+  if(local && isTelegramLink(local)){
+    REPORT_LINK = local;
+  }
+  // 2) Firestore (source of truth)
+  try{
+    const snap = await getDoc(SETTINGS_DOC);
+    const v = normalizeUrl(snap.exists() ? (snap.data().reportLink || "") : "");
+    if(v && isTelegramLink(v)){
+      REPORT_LINK = v;
+      setLocalReportLink(v);
+    } else {
+      // keep default
+      setLocalReportLink(REPORT_LINK);
+    }
+  }catch(_){
+    // offline/no-permission: keep local/default
+  }
+
+  // Update modal input if present
+  if (el.reportLinkInput) el.reportLinkInput.value = REPORT_LINK;
+}
+
+async function saveReportLink(newLink){
+  const v = normalizeUrl(newLink);
+  if(!v) throw new Error("Link bo‘sh bo‘lmasin");
+  if(!isTelegramLink(v)) throw new Error("Telegram link bo‘lsin: https://t.me/...");
+  await setDoc(SETTINGS_DOC, { reportLink: v, updatedAt: Date.now() }, { merge:true });
+  REPORT_LINK = v;
+  setLocalReportLink(v);
+}
+
+/* Modal open/close */
+function openReportModal(){
+  if(!el.reportLinkModal) return;
+  el.reportLinkInput.value = REPORT_LINK;
+  el.reportLinkModal.classList.remove("hidden");
+}
+function closeReportModal(){
+  if(!el.reportLinkModal) return;
+  el.reportLinkModal.classList.add("hidden");
+}
+
+el.btnReportLinkOpen?.addEventListener("click", async ()=>{
+  try{ await loadReportLink(); }catch(_){}
+  openReportModal();
+});
+
+el.btnReportLinkCancel?.addEventListener("click", closeReportModal);
+el.reportLinkModal?.addEventListener("click", (e)=>{
+  const a = e.target?.closest("[data-act='close']");
+  if(a) closeReportModal();
+});
+
+el.btnReportLinkSave?.addEventListener("click", async ()=>{
+  try{
+    await saveReportLink(el.reportLinkInput.value);
+    showToast("✅ Yuborish linki saqlandi.");
+    haptic("light");
+    closeReportModal();
+  }catch(err){
+    showToast("❌ " + err.message);
+  }
+});
 
 /* ===== Local: analysis viewed tracking ===== */
 const VIEW_KEY = "tm_analysis_viewed_codes";
@@ -1449,6 +1551,8 @@ async function copyAdminReport(code){
     const last = localStorage.getItem("tm_last_name");
     if(last) el.userName.value = last;
   }catch(_){}
+  // Report link yuklash (local + Firestore)
+  loadReportLink();
   el.testsList.innerHTML = `<div class="item"><div class="item-title">Boshlash</div><div class="item-meta">Ism kiriting yoki admin bo‘lib kiring.</div></div>`;
   showOnly("auth");
 })();
