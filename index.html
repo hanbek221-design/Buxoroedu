@@ -341,7 +341,12 @@ body.tg{
   color: var(--tg-text);
 }
 
-  </style>
+/* Table polish */
+tbody tr:hover{background: rgba(2,6,23,.025)}
+td b{font-weight: 950}
+.my-row{background: rgba(37,99,235,.08)!important}
+
+</style>
 </head>
 <body>
   <header class="topbar">
@@ -846,7 +851,7 @@ function isViewed(code){
 }
 
 /* ===== DB layer ===== */
-const CACHE = { tests:null, ts:0 };
+const CACHE = { tests:null, ts:0, statsByCode:new Map() };
 
 async function allTests(force=false){
   if(!force && CACHE.tests && (Date.now()-CACHE.ts<15000)) return CACHE.tests;
@@ -873,35 +878,71 @@ async function setLinks(code, patch){
   CACHE.tests=null;
 }
 
-async function getAttempts(code, login){
-  const id = `${code}__${login.toLowerCase()}`;
-  const snap = await getDoc(doc(db,"attempts", id));
-  return snap.exists()? (snap.data().count||0) : 0;
+/* ===== Stats (saqlanadigan ma'lumotlar) =====
+  - attempts: nechta ishlagan
+  - correctTotal / wrongTotal: jami to'g'ri/xato (urinshlar bo'yicha yig'iladi)
+  - lastScore/lastTotal/lastDate: oxirgi urinish ko'rsatkichlari
+*/
+function statId(code, login){ return `${code}__${login.toLowerCase()}`; }
+
+async function getStat(code, login){
+  const snap = await getDoc(doc(db,"stats", statId(code, login)));
+  return snap.exists() ? snap.data() : { code, login, attempts:0, correctTotal:0, wrongTotal:0, lastScore:0, lastTotal:0, lastDate:0 };
 }
-async function incAttempt(code, login){
-  const id = `${code}__${login.toLowerCase()}`;
-  const n = (await getAttempts(code, login)) + 1;
-  await setDoc(doc(db,"attempts", id), { code, login, count:n, updatedAt: Date.now() });
-  return n;
+
+async function saveStat(code, login, patch){
+  await setDoc(doc(db,"stats", statId(code, login)), patch, {merge:true});
+  // Invalidate cache for this code
+  CACHE.statsByCode.delete(code);
 }
-async function getResults(code, max=null){
-  const constraints = [where("code","==",code)];
-  if (max) constraints.push(limit(max));
-  const qs = await getDocs(query(collection(db,"results"), ...constraints));
+
+async function getStatsForCode(code, force=false){
+  if(!force && CACHE.statsByCode.has(code)) return CACHE.statsByCode.get(code);
+  const qs = await getDocs(query(collection(db,"stats"), where("code","==",code), limit(500)));
   const arr=[]; qs.forEach(d=>arr.push(d.data()));
-  return arr.sort((a,b)=> (b.score-a.score) || (a.date-b.date));
+  // Ranking: correctTotal desc, then attempts asc (kam urinish — yuqoriroq), then name
+  arr.sort((a,b)=>
+    (Number(b.correctTotal||0)-Number(a.correctTotal||0)) ||
+    (Number(a.attempts||0)-Number(b.attempts||0)) ||
+    (String(a.login||"").localeCompare(String(b.login||"")))
+  );
+  CACHE.statsByCode.set(code, arr);
+  return arr;
 }
-async function bestOfUser(code, login){
-  const id = `${code}__${login.toLowerCase()}`;
-  const snap = await getDoc(doc(db,"results", id));
-  return snap.exists()? snap.data() : null;
+
+/* ===== Temp results (12 soat) =====
+  - details: savol bo'yicha tafsilot (12 soatda o'chadi)
+*/
+const TEMP_HOURS = 12;
+const TEMP_MS = TEMP_HOURS * 60 * 60 * 1000;
+
+async function upsertTempResult(rec){
+  const id = statId(rec.code, rec.login);
+  await setDoc(doc(db,"results_temp", id), rec);
 }
-async function upsertBestResult(rec){
-  // Har safar oxirgi natija saqlansin (eskisini almashtiradi)
-  const id = `${rec.code}__${rec.login.toLowerCase()}`;
-  const ref = doc(db,"results", id);
-  await setDoc(ref, rec);
+
+async function getTempResult(code, login){
+  const snap = await getDoc(doc(db,"results_temp", statId(code, login)));
+  if(!snap.exists()) return null;
+  const d = snap.data();
+  if(d.expiresAt && d.expiresAt < Date.now()) return null;
+  return d;
 }
+
+async function cleanupExpiredTemps(){
+  // Client-driven cleanup: kimdir kirganda eskirgan temp natijalarni tozalaydi
+  try{
+    const qs = await getDocs(query(collection(db,"results_temp"), where("expiresAt","<", Date.now()), limit(200)));
+    const refs=[]; qs.forEach(d=>refs.push(d.ref));
+    for(let i=0;i<refs.length;i+=450){
+      const batch = writeBatch(db);
+      refs.slice(i,i+450).forEach(r=>batch.delete(r));
+      await batch.commit();
+    }
+  }catch(_){}
+}
+
+/* ===== Delete test deeply ===== */
 async function batchDeleteSnap(snap){
   const refs=[]; snap.forEach(d=>refs.push(d.ref));
   for(let i=0;i<refs.length;i+=450){
@@ -911,14 +952,15 @@ async function batchDeleteSnap(snap){
   }
 }
 async function deleteTestDeep(code){
-  const resSnap = await getDocs(query(collection(db,"results"), where("code","==",code)));
-  await batchDeleteSnap(resSnap);
-  const attSnap = await getDocs(query(collection(db,"attempts"), where("code","==",code)));
-  await batchDeleteSnap(attSnap);
+  // delete stats + temp + test doc
+  const stSnap = await getDocs(query(collection(db,"stats"), where("code","==",code), limit(500)));
+  await batchDeleteSnap(stSnap);
+  const tmpSnap = await getDocs(query(collection(db,"results_temp"), where("code","==",code), limit(500)));
+  await batchDeleteSnap(tmpSnap);
   await deleteDoc(doc(db,"tests", code));
   CACHE.tests=null;
+  CACHE.statsByCode.delete(code);
 }
-
 /* ===== Session / Views ===== */
 let SESSION = { role:null, login:null };
 let ADMIN_KEY = [];
@@ -926,7 +968,8 @@ let PLAY = { code:null, key:[], count:0, chosen:[] };
 let FOCUS = 0;
 let LAST_COPY_TEXT = "";
 let CURRENT_TEST = null;
-let CURRENT_RESULTS = [];
+let CURRENT_STATS = [];
+let MY_TEMP = null;
 
 function showOnly(section){
   // sections: auth, admin, user, play, results
@@ -1085,7 +1128,7 @@ async function renderAdmin(force=false){
         // Admin: barcha natijalarni Telegramga yuborish (copy + chatga o‘tish)
         const test = (await allTests()).find(x=>x.code===t.code) || t;
         const resArr = await getResults(t.code, 200);
-        const text = makeAllResultsText(test, resArr);
+        const text = makeAllStatsText(test, resArr);
         await sendResultToTelegram(text);
         return;
       }
@@ -1365,6 +1408,7 @@ async function finishTest(){
     if(!confirm("Baʼzi savollar belgilanmagan. Baribir yakunlaysizmi?")) return;
   }
 
+  // Score + details
   let score = 0;
   const details = [];
   for(let i=0;i<PLAY.count;i++){
@@ -1375,26 +1419,71 @@ async function finishTest(){
     details.push({ q:i+1, chosen, correct, ok });
   }
 
-  await incAttempt(PLAY.code, SESSION.login);
-  const rec = { login: SESSION.login, code: PLAY.code, score, total: PLAY.count, details, date: Date.now() };
-  await upsertBestResult(rec);
+  const wrong = PLAY.count - score;
 
-  await viewResults(PLAY.code, rec);
+  // Old stat (attempts) — birinchi urinishni aniqlash uchun
+  const prev = await getStat(PLAY.code, SESSION.login);
+  const prevAttempts = Number(prev.attempts||0);
+
+  // Update stats (doimiy)
+  const next = {
+    code: PLAY.code,
+    login: SESSION.login,
+    attempts: prevAttempts + 1,
+    correctTotal: Number(prev.correctTotal||0) + score,
+    wrongTotal: Number(prev.wrongTotal||0) + wrong,
+    lastScore: score,
+    lastTotal: PLAY.count,
+    lastDate: Date.now(),
+    updatedAt: Date.now()
+  };
+  await saveStat(PLAY.code, SESSION.login, next);
+
+  // Temp details (12 soat)
+  const tempRec = {
+    login: SESSION.login,
+    code: PLAY.code,
+    score, total: PLAY.count,
+    details,
+    date: Date.now(),
+    expiresAt: Date.now() + TEMP_MS
+  };
+  await upsertTempResult(tempRec);
+
+  // Natijani ko'rsatish
+  await viewResults(PLAY.code, tempRec);
   haptic("medium");
-}
 
+  // 1-marta ishlaganda avtomatik Telegramga yuborish (copy + linkga o'tish)
+  if(prevAttempts === 0){
+    const tests = await allTests();
+    const t = tests.find(x=>x.code===PLAY.code) || CURRENT_TEST || {name:"Test", code:PLAY.code, count: PLAY.count};
+    const share = makeCopyText(t, tempRec);
+    await sendResultToTelegram(share);
+  }
+}
 /* ===== Results ===== */
 function pct(rec){ return Math.round((rec.score/rec.total)*100); }
 
 
-function makeAllResultsText(test, arr){
-  let text = `🧪 Test: ${test.name} (${test.code})\n📝 Savollar: ${test.count} ta\n👥 Ishtirokchilar: ${arr.length} ta\n---\n`;
+function makeAllStatsText(test, arr){
+  let text = `🏁 Reyting (12 soatlik tafsilotlar o‘chadi)
+🧪 Test: ${test.name} (${test.code})
+📝 Savollar: ${test.count} ta
+👥 Ishtirokchilar: ${arr.length} ta
+---
+`;
   if(!arr.length){
-    text += "Hali natijalar yo‘q.\n";
+    text += "Hali natijalar yo‘q.
+";
     return text;
   }
-  arr.forEach((r,i)=>{
-    text += `${i+1}) ${r.login} — ${pct(r)}%  ✅ ${r.score}/${r.total}\n`;
+  arr.slice(0, 200).forEach((r,i)=>{
+    const total = (Number(r.correctTotal||0)+Number(r.wrongTotal||0));
+    const acc = total ? Math.round((Number(r.correctTotal||0)/total)*100) : 0;
+    const badge = i===0 ? "🥇" : i===1 ? "🥈" : i===2 ? "🥉" : "🏅";
+    text += `${badge} ${i+1}) ${r.login} | urinish: ${Number(r.attempts||0)} | ✅ ${Number(r.correctTotal||0)} | ❌ ${Number(r.wrongTotal||0)} | ${acc}%
+`;
   });
   return text;
 }
@@ -1425,6 +1514,8 @@ function renderMyDetail(rec){
 }
 
 async function viewResults(code, justMade=null){
+  await cleanupExpiredTemps();
+
   const tests = await allTests();
   const t = tests.find(x=>x.code===code);
   if(!t) return showToast("Test topilmadi.");
@@ -1433,38 +1524,54 @@ async function viewResults(code, justMade=null){
   el.resTitle.textContent = `${t.name} — Natijalar`;
   showOnly("results");
 
-  const arr = await getResults(code, 200);
-  CURRENT_RESULTS = arr;
-  if(!arr.length){
+  // Leaderboard: stats (saqlanadigan)
+  const statsArr = await getStatsForCode(code, true);
+  CURRENT_STATS = statsArr;
+
+  if(!statsArr.length){
     el.leaderboardWrap.innerHTML = `<div class="item"><div class="item-title">Natijalar yo‘q</div><div class="item-meta">Hali hech kim ishlamagan.</div></div>`;
   }else{
-    let h = `<table><thead><tr><th>#</th><th>Ism</th><th>Ball</th><th>Foiz</th><th>Sana</th></tr></thead><tbody>`;
-    arr.forEach((r,i)=>{
-      const mine = SESSION.login && r.login === SESSION.login;
+    let h = `<table><thead><tr>
+      <th>#</th><th>Ism</th><th>Urinish</th><th>✅ To‘g‘ri</th><th>❌ Xato</th><th>📈 Aniqlik</th><th>Oxirgi</th>
+    </tr></thead><tbody>`;
+    statsArr.slice(0, 200).forEach((r,i)=>{
+      const mine = SESSION.login && String(r.login) === String(SESSION.login);
+      const total = (Number(r.correctTotal||0)+Number(r.wrongTotal||0));
+      const acc = total ? Math.round((Number(r.correctTotal||0)/total)*100) : 0;
+      const badge = i===0 ? "🥇" : i===1 ? "🥈" : i===2 ? "🥉" : "";
       h += `<tr class="${mine?"my-row":""}">
-        <td>${i+1}</td>
+        <td><b>${badge} ${i+1}</b></td>
         <td>${esc(r.login)}</td>
-        <td><b>${r.score}/${r.total}</b></td>
-        <td>${pct(r)}%</td>
-        <td>${new Date(r.date).toLocaleString()}</td>
+        <td><b>${Number(r.attempts||0)}</b></td>
+        <td><b>${Number(r.correctTotal||0)}</b></td>
+        <td><b>${Number(r.wrongTotal||0)}</b></td>
+        <td>${acc}%</td>
+        <td>${r.lastDate ? new Date(r.lastDate).toLocaleString() : "-"}</td>
       </tr>`;
     });
     h += `</tbody></table>`;
     el.leaderboardWrap.innerHTML = h;
   }
 
-  const mine = justMade || (SESSION.login ? await bestOfUser(code, SESSION.login) : null);
-  if(mine){
-    el.detailWrap.innerHTML = renderMyDetail(mine);
-    LAST_COPY_TEXT = makeCopyText(t, mine);
+  // My detail: show temp details (12 soat) bo'lsa
+  let mineTemp = null;
+  if(SESSION.login){
+    mineTemp = justMade || await getTempResult(code, SESSION.login);
+  }
+  MY_TEMP = mineTemp;
+
+  if(mineTemp){
+    el.detailWrap.innerHTML = renderMyDetail(mineTemp);
+    LAST_COPY_TEXT = makeCopyText(t, mineTemp);
   }else{
-    el.detailWrap.innerHTML = `<div class="item"><div class="item-title">Tafsilot topilmadi</div><div class="item-meta">Avval testni ishlang.</div></div>`;
+    el.detailWrap.innerHTML = `<div class="item">
+      <div class="item-title">Tafsilotlar yo‘q</div>
+      <div class="item-meta">Savollar bo‘yicha tafsilotlar 12 soatdan keyin o‘chiriladi. Reytingda esa faqat urinishlar va jami to‘g‘ri/xato saqlanadi.</div>
+    </div>`;
     LAST_COPY_TEXT = "";
   }
 
-  // IMPORTANT:
-  // - Video/PDF: show in results too (if exists)
-  // - Analysis: show in results only (test finished). When opened, markViewed => appears in list later.
+  // Materiallar: Video/PDF har doim; Tahlil link bo'lsa har doim ko'rinsin
   const mats = [];
   if(t.videoLink) mats.push({k:"video", text:"🎬 Video tahlil", url:t.videoLink});
   if(t.pdfLink) mats.push({k:"pdf", text:"📄 PDF test", url:t.pdfLink});
@@ -1486,23 +1593,18 @@ async function viewResults(code, justMade=null){
       const k = chip.dataset.k;
       const m = mats.find(x=>x.k===k);
       if(!m) return;
-
-      if(k === "analysis"){
-        markViewed(code); // after user opens analysis, it becomes available in test list
-      }
       openAnyLink(m.url);
       haptic("light");
     });
     el.detailWrap.appendChild(box);
   }
 }
-
 /* ===== Copy button ===== */
 el.btnCopy.addEventListener("click", async ()=>{
   let text = LAST_COPY_TEXT;
   if(!text && CURRENT_TEST){
     // Admin yoki foydalanuvchi natijasi topilmasa, umumiy ro‘yxatni nusxalaymiz
-    text = makeAllResultsText(CURRENT_TEST, CURRENT_RESULTS || []);
+    text = makeAllStatsText(CURRENT_TEST, CURRENT_STATS || []);
   }
   if(!text) return showToast("Avval natija chiqsin.");
   const ok = await copyToClipboard(text);
@@ -1513,7 +1615,7 @@ el.btnCopy.addEventListener("click", async ()=>{
 el.btnSendTg?.addEventListener("click", async ()=>{
   let text = LAST_COPY_TEXT;
   if(!text && CURRENT_TEST){
-    text = makeAllResultsText(CURRENT_TEST, CURRENT_RESULTS || []);
+    text = makeAllStatsText(CURRENT_TEST, CURRENT_STATS || []);
   }
   await sendResultToTelegram(text);
 });
@@ -1525,21 +1627,8 @@ async function copyAdminReport(code){
   const t = tests.find(x=>x.code===code);
   if(!t) return showToast("Test topilmadi.");
 
-  const res = await getResults(code, 200);
-  let text = `🧪 Test: ${t.name} (${t.code})
-📝 Savollar: ${t.count} ta
-👥 Ishtirokchilar: — ta
----
-`;
-  if(res.length){
-    res.forEach((r,i)=>{
-      text += `${i+1}) ${r.login} — ${pct(r)}%  ✅ ${r.score}/${r.total}
-`;
-    });
-  }else{
-    text += "Hali natijalar yo‘q.
-";
-  }
+  const statsArr = await getStatsForCode(code, true);
+  const text = makeAllStatsText(t, statsArr);
 
   const ok = await copyToClipboard(text);
   showToast(ok ? "✅ Hisobot nusxasi olindi." : "✅ Nusxa olish oynasi ochildi.");
@@ -1556,7 +1645,6 @@ async function copyAdminReport(code){
   el.testsList.innerHTML = `<div class="item"><div class="item-title">Boshlash</div><div class="item-meta">Ism kiriting yoki admin bo‘lib kiring.</div></div>`;
   showOnly("auth");
 })();
-
-  </script>
+</script>
 </body>
 </html>
