@@ -520,6 +520,7 @@ body.tg{
         </div>
         <div class="row" style="gap:8px">
           <button class="btn ghost" id="btnBack2" type="button">⬅️ Orqaga</button>
+          <button class="btn" id="btnSendTg" type="button">📨 Telegramga yuborish</button>
           <button class="btn" id="btnCopy" type="button">📋 Nusxa olish</button>
         </div>
       </div>
@@ -605,6 +606,7 @@ const el = {
 
   resTitle: $("resTitle"),
   btnBack2: $("btnBack2"),
+  btnSendTg: $("btnSendTg"),
   btnCopy: $("btnCopy"),
   leaderboardWrap: $("leaderboardWrap"),
   detailWrap: $("detailWrap"),
@@ -612,6 +614,9 @@ const el = {
 
 /* ===== Telegram WebApp integration ===== */
 const tg = window.Telegram?.WebApp;
+
+// Telegram natijalar yuboriladigan chat/post linki (siz bergan)
+const TG_REPORT_LINK = "https://t.me/c/3086001686/18";
 
 function tgInit(){
   if (!tg) return;
@@ -653,6 +658,32 @@ function showToast(msg){
   el.toast.classList.add("show");
   clearTimeout(showToast._t);
   showToast._t = setTimeout(()=> el.toast.classList.remove("show"), 2200);
+}
+
+
+async function copyToClipboard(text){
+  try{
+    await navigator.clipboard.writeText(text);
+    return true;
+  }catch(_){
+    try{
+      prompt("Ctrl+C bilan nusxa oling:", text);
+      return false;
+    }catch(__){
+      return false;
+    }
+  }
+}
+
+// “Telegramga yuborish”: natijani nusxalab, ko‘rsatilgan Telegram chat/postga olib boradi.
+// Eslatma: WebApp ichidan guruhga avtomatik post qilish faqat bot-server orqali bo‘ladi.
+// Bu tugma sizga eng qulay yo‘l: Copy + Telegramga o'tish.
+async function sendResultToTelegram(text){
+  if(!text) return showToast("Avval natija chiqsin.");
+  await copyToClipboard(text);
+  showToast("✅ Nusxa olindi. Telegramda paste qilib yuboring.");
+  openAnyLink(TG_REPORT_LINK);
+  haptic("light");
 }
 
 el.btnClose?.addEventListener("click", ()=>{
@@ -793,6 +824,7 @@ let PLAY = { code:null, key:[], count:0, chosen:[] };
 let FOCUS = 0;
 let LAST_COPY_TEXT = "";
 let CURRENT_TEST = null;
+let CURRENT_RESULTS = [];
 
 function showOnly(section){
   // sections: auth, admin, user, play, results
@@ -922,6 +954,7 @@ async function renderAdmin(force=false){
       <div class="item-actions">
         <button class="btn" type="button" data-act="res">Natijalar</button>
         <button class="btn" type="button" data-act="copy">Hisobot nusxasi</button>
+        <button class="btn" type="button" data-act="sendTg">Telegramga yuborish</button>
         <button class="btn" type="button" data-act="links">Linklar</button>
         <button class="btn ghost" type="button" data-act="del">O‘chirish</button>
       </div>
@@ -944,6 +977,14 @@ async function renderAdmin(force=false){
       }
       if(act === "copy"){
         await copyAdminReport(t.code);
+        return;
+      }
+      if(act === "sendTg"){
+        // Admin: barcha natijalarni Telegramga yuborish (copy + chatga o‘tish)
+        const test = (await allTests()).find(x=>x.code===t.code) || t;
+        const resArr = await getResults(t.code, 200);
+        const text = makeAllResultsText(test, resArr);
+        await sendResultToTelegram(text);
         return;
       }
       if(act === "del"){
@@ -1243,6 +1284,19 @@ async function finishTest(){
 /* ===== Results ===== */
 function pct(rec){ return Math.round((rec.score/rec.total)*100); }
 
+
+function makeAllResultsText(test, arr){
+  let text = `🧪 Test: ${test.name} (${test.code})\n📝 Savollar: ${test.count} ta\n👥 Ishtirokchilar: ${arr.length} ta\n---\n`;
+  if(!arr.length){
+    text += "Hali natijalar yo‘q.\n";
+    return text;
+  }
+  arr.forEach((r,i)=>{
+    text += `${i+1}) ${r.login} — ${pct(r)}%  ✅ ${r.score}/${r.total}\n`;
+  });
+  return text;
+}
+
 function makeCopyText(test, rec){
   const lines = [];
   lines.push(`🧪 Test: ${test.name} (${test.code})`);
@@ -1278,6 +1332,7 @@ async function viewResults(code, justMade=null){
   showOnly("results");
 
   const arr = await getResults(code, 200);
+  CURRENT_RESULTS = arr;
   if(!arr.length){
     el.leaderboardWrap.innerHTML = `<div class="item"><div class="item-title">Natijalar yo‘q</div><div class="item-meta">Hali hech kim ishlamagan.</div></div>`;
   }else{
@@ -1342,15 +1397,25 @@ async function viewResults(code, justMade=null){
 
 /* ===== Copy button ===== */
 el.btnCopy.addEventListener("click", async ()=>{
-  if(!LAST_COPY_TEXT) return showToast("Avval natija chiqsin.");
-  try{
-    await navigator.clipboard.writeText(LAST_COPY_TEXT);
-    showToast("✅ Nusxa olindi.");
-    haptic("light");
-  }catch(_){
-    prompt("Ctrl+C bilan nusxa oling:", LAST_COPY_TEXT);
+  let text = LAST_COPY_TEXT;
+  if(!text && CURRENT_TEST){
+    // Admin yoki foydalanuvchi natijasi topilmasa, umumiy ro‘yxatni nusxalaymiz
+    text = makeAllResultsText(CURRENT_TEST, CURRENT_RESULTS || []);
   }
+  if(!text) return showToast("Avval natija chiqsin.");
+  const ok = await copyToClipboard(text);
+  showToast(ok ? "✅ Nusxa olindi." : "✅ Nusxa olish oynasi ochildi.");
+  haptic("light");
 });
+
+el.btnSendTg?.addEventListener("click", async ()=>{
+  let text = LAST_COPY_TEXT;
+  if(!text && CURRENT_TEST){
+    text = makeAllResultsText(CURRENT_TEST, CURRENT_RESULTS || []);
+  }
+  await sendResultToTelegram(text);
+});
+
 
 /* ===== Admin report copy ===== */
 async function copyAdminReport(code){
@@ -1374,12 +1439,8 @@ async function copyAdminReport(code){
 ";
   }
 
-  try{
-    await navigator.clipboard.writeText(text);
-    showToast("✅ Hisobot nusxasi olindi.");
-  }catch(_){
-    prompt("Ctrl+C bilan nusxa oling:", text);
-  }
+  const ok = await copyToClipboard(text);
+  showToast(ok ? "✅ Hisobot nusxasi olindi." : "✅ Nusxa olish oynasi ochildi.");
 }
 
 /* ===== Boot ===== */
