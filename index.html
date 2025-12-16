@@ -1053,6 +1053,8 @@ let SESSION = { role:null, login:null };
 let ADMIN_KEY = [];
 let PLAY = { code:null, key:[], count:0, chosen:[] };
 let FOCUS = 0;
+let LAST_FOCUS_EL = null;
+let LB_TIMER = null;
 let LAST_COPY_TEXT = "";
 let CURRENT_TEST = null;
 let CURRENT_STATS = [];
@@ -1069,7 +1071,14 @@ function showOnly(section){
   el.resultsCard.classList.toggle("hidden", section !== "results");
 }
 
+function stopLiveStats(){
+  try{ UNSUB_STATS?.(); }catch(_){}
+  UNSUB_STATS = null;
+  if(LB_TIMER){ clearTimeout(LB_TIMER); LB_TIMER = null; }
+}
+
 function logout(){
+  stopLiveStats();
   SESSION = {role:null, login:null};
   CURRENT_TEST = null;
   showOnly("auth");
@@ -1422,10 +1431,12 @@ async function renderUser(force=false){
 
 /* ===== Play flow ===== */
 el.btnBack1.addEventListener("click", ()=>{
+  stopLiveStats();
   showOnly("user");
   renderUser(false);
 });
 el.btnBack2.addEventListener("click", ()=>{
+  stopLiveStats();
   showOnly("user");
   renderUser(false);
 });
@@ -1444,6 +1455,7 @@ async function startTest(code){
     chosen: new Array(Number(t.count||0)).fill(null)
   };
   FOCUS = 0;
+  LAST_FOCUS_EL = null;
   el.playTitle.textContent = `${t.name} — ${PLAY.count} savol`;
   renderPlay();
   showOnly("play");
@@ -1484,11 +1496,14 @@ function setFocus(i){
   if(i>=PLAY.count) i=PLAY.count-1;
   FOCUS = i;
 
-  el.playBody.querySelectorAll(".qrow").forEach(x=>x.classList.remove("focus"));
+  if(LAST_FOCUS_EL) LAST_FOCUS_EL.classList.remove("focus");
   const row = $("q_"+i);
   if(row){
     row.classList.add("focus");
-    row.scrollIntoView({block:"nearest", behavior:"smooth"});
+    LAST_FOCUS_EL = row;
+    row.scrollIntoView({block:"nearest", behavior:"auto"});
+  }else{
+    LAST_FOCUS_EL = null;
   }
 }
 
@@ -1681,6 +1696,7 @@ function sortStats(arr){
 
 function renderLeaderboard(statsArr){
   const isAdmin = SESSION?.role === "admin";
+  const MAX_ROWS = isAdmin ? 200 : 50;
   const maskName = (s)=>{
     s = String(s||"");
     if(isAdmin) return esc(s);
@@ -1712,7 +1728,7 @@ function renderLeaderboard(statsArr){
     <th>#</th><th>Ism</th><th>Urinish</th><th>✅ To‘g‘ri</th><th>❌ Xato</th><th>📈 Aniqlik</th>${isAdmin?'<th>Oxirgi</th>':""}
   </tr></thead><tbody>`;
 
-  statsArr.slice(0, 250).forEach((r,i)=>{
+  statsArr.slice(0, MAX_ROWS).forEach((r,i)=>{
     const mine = SESSION?.login && String(r.login) === String(SESSION.login);
     const total = (Number(r.correctTotal||0)+Number(r.wrongTotal||0));
     const acc = total ? Math.round((Number(r.correctTotal||0)/total)*100) : 0;
@@ -1755,15 +1771,19 @@ function renderLeaderboard(statsArr){
 }
 
 function subscribeStats(code){
-  try{ UNSUB_STATS?.(); }catch(_){}
-  UNSUB_STATS = null;
+  stopLiveStats();
 
   const q = query(collection(db,"stats"), where("code","==",code), limit(500));
   UNSUB_STATS = onSnapshot(q, (snap)=>{
+    // Agar natijalar oynasi yopiq bo'lsa - UI chizmaymiz
+    if(el.resultsCard.classList.contains("hidden")) return;
+
     const arr=[]; snap.forEach(d=>arr.push(d.data()));
     sortStats(arr);
     CURRENT_STATS = arr;
-    renderLeaderboard(arr);
+
+    if(LB_TIMER) clearTimeout(LB_TIMER);
+    LB_TIMER = setTimeout(()=> renderLeaderboard(arr), 250);
   }, (err)=>{
     console.warn(err);
     showToast("⚠️ Reytingni yangilashda xato. Internetni tekshiring.");
