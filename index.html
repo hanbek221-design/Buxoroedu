@@ -594,8 +594,7 @@ td b{font-weight: 950}
         </div>
         <div class="row" style="gap:8px">
           <button class="btn ghost" id="btnBack2" type="button">⬅️ Orqaga</button>
-          <button class="btn" id="btnSendTg" type="button">📨 Telegramga yuborish</button>
-          <button class="btn" id="btnCopy" type="button">📋 Nusxa olish</button>
+          <button class="btn" id="btnCopy" type="button">📋 Nusxa olish (telegramga yuborish uchun nusxa olishni bosing)</button>
         </div>
       </div>
 
@@ -611,18 +610,18 @@ td b{font-weight: 950}
     <div class="modal-card">
       <div class="modal-head">
         <div>
-          <div class="modal-title" id="guideTitle">Natija nusxalandi</div>
-          <div class="modal-sub">Telegram guruhga yuborish uchun quyidagilarni bajaring.</div>
+          <div class="modal-title" id="guideTitle">Natija nusxa olindi</div>
+          <div class="modal-sub">Endi Telegramga kiring va guruhingizga natijani “Paste / Вставить” qilib yuboring.</div>
         </div>
         <button class="btn ghost" type="button" id="btnGuideBack">⬅️ Orqaga</button>
         <button class="btn ghost" type="button" id="btnGuideClose">Yopish</button>
       </div>
 
       <div class="note">
-        1) Telegram guruhingiz ochiladi (yoki o‘zingiz ochasiz).<br/>
-        2) Xabar yozish oynasidagi bo‘sh joyni <b>bosib turing</b>.<br/>
-        3) <b>“Paste / Вставить”</b> ni tanlang.<br/>
-        4) <b>Yuboring</b> — natija guruhda paydo bo‘ladi.
+        ✅ <b>Nusxa olindi.</b> Endi Telegramga kiring va o‘zingizning guruhingizni oching.<br/>
+        1) Xabar yozish joyidagi bo‘sh joyni <b>bosib turing</b>.<br/>
+        2) <b>“Paste / Вставить”</b> ni tanlang.<br/>
+        3) <b>Yuboring</b> — natija guruhda chiqadi.
       </div>
 
       <label style="margin-top:10px">Nusxalangan matn</label>
@@ -773,11 +772,11 @@ function haptic(type="light"){
   try{ tg?.HapticFeedback?.impactOccurred?.(type); }catch(_){}
 }
 
-function showToast(msg){
+function showToast(msg, ms=2200){
   el.toast.textContent = msg;
   el.toast.classList.add("show");
   clearTimeout(showToast._t);
-  showToast._t = setTimeout(()=> el.toast.classList.remove("show"), 2200);
+  showToast._t = setTimeout(()=> el.toast.classList.remove("show"), ms);
 }
 
 
@@ -956,6 +955,48 @@ function markViewed(code){
 function isViewed(code){
   return getViewed().includes(code);
 }
+
+
+/* ===== Local cache: last result (fallback) =====
+  - Faqat foydalanuvchining oxirgi natijasi localStorage’da saqlanadi.
+  - UI tez ochilishi uchun: avval local’dan ko‘rsatamiz, keyin Firestore’dan yangilaymiz.
+*/
+const LS_LAST_RESULT_PREFIX = "tm_last_result__";
+
+function resultLsKey(code, login){
+  return `${LS_LAST_RESULT_PREFIX}${String(code||"")}__${String(login||"").toLowerCase()}`;
+}
+function saveLocalResult(rec){
+  try{
+    if(!rec?.code || !rec?.login) return;
+    localStorage.setItem(resultLsKey(rec.code, rec.login), JSON.stringify(rec));
+  }catch(_){}
+}
+function loadLocalResult(code, login){
+  try{
+    const raw = localStorage.getItem(resultLsKey(code, login));
+    if(!raw) return null;
+    const rec = JSON.parse(raw);
+    return (rec && rec.code && rec.login) ? rec : null;
+  }catch(_){ return null; }
+}
+
+/* ===== Local: details auto-hide timer (1 soat) ===== */
+const LS_HIDE_DETAILS_PREFIX = "tm_hide_details_at__";
+
+function hideDetailsKey(code, login){
+  return `${LS_HIDE_DETAILS_PREFIX}${String(code||"")}__${String(login||"").toLowerCase()}`;
+}
+function setHideDetailsAt(code, login, ts){
+  try{ localStorage.setItem(hideDetailsKey(code, login), String(Number(ts)||0)); }catch(_){}
+}
+function getHideDetailsAt(code, login){
+  try{
+    const v = localStorage.getItem(hideDetailsKey(code, login));
+    return Number(v||0);
+  }catch(_){ return 0; }
+}
+
 
 /* ===== DB layer ===== */
 const CACHE = { tests:null, ts:0, statsByCode:new Map() };
@@ -1594,20 +1635,13 @@ async function finishTest(){
     date: Date.now()
   };
   await upsertResult(resultRec);
+  saveLocalResult(resultRec);
 
   // Natijani ko'rsatish
   await viewResults(PLAY.code, resultRec);
   haptic("medium");
-
-  // 1-marta ishlaganda: avtomatik nusxa + guruhni ochish (yuborish emas)
-  if(prevAttempts === 0){
-    const tests = await allTests();
-    const t = tests.find(x=>x.code===PLAY.code) || CURRENT_TEST || {name:"Test", code:PLAY.code, count: PLAY.count};
-    const share = makeCopyText(t, resultRec);
-    await copyToClipboard(share);
-    showToast("✅ Natijangiz nusxalandi. Telegram guruh ochilmoqda...");
-    openGuideModal(share, true);
-  }
+  // Avtomatik nusxa/Telegram ochish yo‘q: xato yuborib qo‘ymaslik uchun.
+  showToast("✅ Natija saqlandi. Telegramga yuborish uchun “Nusxa olish” tugmasini bosing.", 3200);
 }
 /* ===== Results ===== */
 function pct(rec){ return Math.round((rec.score/rec.total)*100); }
@@ -1628,6 +1662,35 @@ function makeAllStatsText(test, arr){
   return text;
 }
 
+
+function makeShareText(test, rec, statsArr){
+  const score = Number(rec?.score||0);
+  const total = Number(rec?.total||0);
+  const percent = total ? Math.round((score/total)*100) : 0;
+  const login = String(rec?.login || SESSION?.login || "").trim();
+
+  let attempts = Number(rec?.attempt || 0);
+  let rank = null;
+  let participants = null;
+
+  if(Array.isArray(statsArr) && statsArr.length && login){
+    participants = statsArr.length;
+    const idx = statsArr.findIndex(r => String(r.login) === login);
+    if(idx >= 0){
+      rank = idx + 1;
+      attempts = Math.max(attempts, Number(statsArr[idx]?.attempts || 0));
+    }
+  }
+
+  const lines = [];
+  lines.push(`🧪 Test: ${test?.name || "Test"} (${test?.code || ""})`);
+  if(login) lines.push(`👤 Ism: ${login}`);
+  lines.push(`📊 Natija: ${score}/${total} — ${percent}%`);
+  if(attempts) lines.push(`🔁 Ishlagan: ${attempts} marta`);
+  if(rank != null && participants != null) lines.push(`🏆 O‘rin: #${rank} / ${participants}`);
+  return lines.join("\n");
+}
+
 function makeCopyText(test, rec){
   const lines = [];
   lines.push(`🧪 Test: ${test.name} (${test.code})`);
@@ -1644,7 +1707,11 @@ function renderMyDetail(rec, isOther=false){
   const wrong = total - score;
   const acc = total ? Math.round((score/total)*100) : 0;
 
-  const who = isOther ? `<div class="pill">👤 ${esc(rec.login||"")}</div>` : `<div class="pill ok">👤 Siz</div>`;
+  const attempt = Number(rec.attempt||0);
+  const isAdmin = (SESSION?.role === "admin");
+  const hideAt = (!isAdmin && !isOther) ? getHideDetailsAt(rec?.code, rec?.login) : 0;
+  const canShowDetails = isAdmin || isOther || !hideAt || (Date.now() <= hideAt);
+const who = isOther ? `<div class="pill">👤 ${esc(rec.login||"")}</div>` : `<div class="pill ok">👤 Siz</div>`;
   const when = rec.date ? new Date(rec.date).toLocaleString() : "-";
 
   let html = `
@@ -1653,6 +1720,7 @@ function renderMyDetail(rec, isOther=false){
         <div class="item-title">Natija tafsiloti</div>
         <div class="row" style="gap:8px;flex-wrap:wrap">
           ${who}
+          <div class="pill">🔁 ${attempt||0} marta</div>
           <div class="pill">${acc}%</div>
           <div class="pill">🕒 ${when}</div>
         </div>
@@ -1665,7 +1733,7 @@ function renderMyDetail(rec, isOther=false){
     </div>
   `;
 
-  if(Array.isArray(rec.details) && rec.details.length){
+  if(canShowDetails && Array.isArray(rec.details) && rec.details.length){
     html += `<div class="item"><div class="item-title">Savolma-savol</div><div class="item-meta">✅ yashil — to‘g‘ri, ❌ qizil — xato</div><div class="grid">`;
     rec.details.forEach(d=>{
       const ok = !!d.ok;
@@ -1782,6 +1850,10 @@ function subscribeStats(code){
     sortStats(arr);
     CURRENT_STATS = arr;
 
+    if(MY_TEMP && CURRENT_TEST && SESSION?.role !== "admin"){
+      LAST_COPY_TEXT = makeShareText(CURRENT_TEST, MY_TEMP, arr);
+    }
+
     if(LB_TIMER) clearTimeout(LB_TIMER);
     LB_TIMER = setTimeout(()=> renderLeaderboard(arr), 250);
   }, (err)=>{
@@ -1804,13 +1876,30 @@ async function viewResults(code, justMade=null){
 
   // Detail: user sees own; admin sees own by default, can click row for others
   let rec = null;
-  if(SESSION.login){
-    rec = justMade || await getResult(code, SESSION.login);
+  const login = SESSION?.login;
+  if(login){
+    // 1) tez: local cache (agar justMade bo'lmasa)
+    if(!justMade){
+      const cached = loadLocalResult(code, login);
+      if(cached) rec = cached;
+    }
+    // 2) Firestore (source of truth)
+    try{
+      const fromDb = justMade || await getResult(code, login);
+      if(fromDb){
+        rec = fromDb;
+        saveLocalResult(fromDb);
+      }
+    }catch(_){}
   }
-
-  if(rec){
+if(rec){
+    MY_TEMP = rec;
     el.detailWrap.innerHTML = renderMyDetail(rec, false);
-    LAST_COPY_TEXT = makeCopyText(t, rec);
+    if(SESSION?.role === "admin"){
+      LAST_COPY_TEXT = makeCopyText(t, rec);
+    }else{
+      LAST_COPY_TEXT = makeShareText(t, rec, CURRENT_STATS || []);
+    }
   }else{
     el.detailWrap.innerHTML = `<div class="item">
       <div class="item-title">Tafsilotlar yo‘q</div>
@@ -1859,36 +1948,40 @@ async function viewResults(code, justMade=null){
     el.detailWrap.appendChild(box);
   }
 }
-/* ===== Copy button ===== */
+/* ===== Copy button (Telegramga yuborish uchun) ===== */
 el.btnCopy.addEventListener("click", async ()=>{
-  let text = LAST_COPY_TEXT;
-  if(!text && CURRENT_TEST){
-    text = makeAllStatsText(CURRENT_TEST, CURRENT_STATS || []);
-  }
-  if(!text) return showToast("Avval natija chiqsin.");
-  await copyToClipboard(text);
-  showToast("✅ Natijangiz nusxalandi. Endi istagan joyga “Paste / Вставить” qilib yuboring.");
-  openGuideModal(text, false);
-  haptic("light");
-});
+  if(!CURRENT_TEST) return showToast("Avval testni tanlang yoki yakunlang.");
 
-el.btnSendTg?.addEventListener("click", async ()=>{
-  if(SESSION.role === "admin"){
-    if(!CURRENT_TEST) return showToast("Test tanlang.");
+  // Admin: reyting (hamma) nusxasi
+  if(SESSION?.role === "admin"){
     const text = makeAllStatsText(CURRENT_TEST, CURRENT_STATS || []);
-    await sendResultToTelegram(text);
+    await copyToClipboard(text);
+    showToast("✅ Hisobot nusxasi olindi. Telegramga yuborish uchun “Paste / Вставить” qiling.", 3600);
+    openGuideModal(text, false, 4000);
+    haptic("light");
     return;
   }
-  let text = LAST_COPY_TEXT;
-  if(!text && CURRENT_TEST && SESSION.login){
-    const rec = await getResult(CURRENT_TEST.code, SESSION.login);
-    if(rec) text = makeCopyText(CURRENT_TEST, rec);
+
+  // User: faqat summary (urinsh + foiz + o‘rin)
+  let rec = MY_TEMP;
+  if(!rec && SESSION?.login){
+    rec = loadLocalResult(CURRENT_TEST.code, SESSION.login) || await getResult(CURRENT_TEST.code, SESSION.login);
+    if(rec) saveLocalResult(rec);
   }
-  if(!text) return showToast("Avval testni yakunlang.");
-  await sendResultToTelegram(text);
+  if(!rec) return showToast("Avval testni yakunlang.");
+
+  const text = makeShareText(CURRENT_TEST, rec, CURRENT_STATS || []);
+  LAST_COPY_TEXT = text;
+  await copyToClipboard(text);
+  // Tafsilotlar 1 soat davomida ko‘rinadi, keyin yashiriladi
+  const prev = getHideDetailsAt(CURRENT_TEST.code, SESSION.login);
+  const next = Date.now() + 60*60*1000;
+  setHideDetailsAt(CURRENT_TEST.code, SESSION.login, Math.max(prev||0, next));
+
+  showToast("✅ Nusxa olindi. Endi Telegramga kiring va guruhingizga natijani “Paste / Вставить” qiling.", 3800);
+  openGuideModal(text, false, 4000);
+  haptic("light");
 });
-
-
 /* ===== Admin report copy ===== */
 async function copyAdminReport(code){
   const tests = await allTests();
@@ -1905,12 +1998,18 @@ async function copyAdminReport(code){
 
 /* ===== Clipboard guide ===== */
 let LAST_GUIDE_TEXT = "";
+let GUIDE_AUTO_T = null;
 
-function openGuideModal(text, openChat=false){
+function openGuideModal(text, openChat=false, autoCloseMs=null){
   LAST_GUIDE_TEXT = text || "";
   if(el.guideText) el.guideText.value = LAST_GUIDE_TEXT;
 
   el.guideModal?.classList.remove("hidden");
+
+  if(autoCloseMs){
+    clearTimeout(GUIDE_AUTO_T);
+    GUIDE_AUTO_T = setTimeout(()=> closeGuideModal(), autoCloseMs);
+  }
 
   if(openChat){
     // Telegram guruh linkini ochishga urinib ko‘ramiz
@@ -1919,9 +2018,10 @@ function openGuideModal(text, openChat=false){
 }
 
 function closeGuideModal(){
+  clearTimeout(GUIDE_AUTO_T);
+  GUIDE_AUTO_T = null;
   el.guideModal?.classList.add("hidden");
 }
-
 el.btnGuideBack?.addEventListener("click", closeGuideModal);
 el.btnGuideClose?.addEventListener("click", closeGuideModal);
 el.guideModal?.addEventListener("click", (e)=>{
