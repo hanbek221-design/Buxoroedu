@@ -594,7 +594,7 @@ td b{font-weight: 950}
         </div>
         <div class="row" style="gap:8px">
           <button class="btn ghost" id="btnBack2" type="button">⬅️ Orqaga</button>
-          <button class="btn" id="btnCopy" type="button">📋 Nusxa olish (telegramga yuborish uchun nusxa olishni bosing)</button>
+<button class="btn" id="btnCopy" type="button">📋 Nusxa olish (telegramga yuborish uchun nusxa olishni bosing)</button>
         </div>
       </div>
 
@@ -610,18 +610,18 @@ td b{font-weight: 950}
     <div class="modal-card">
       <div class="modal-head">
         <div>
-          <div class="modal-title" id="guideTitle">Natija nusxa olindi</div>
-          <div class="modal-sub">Endi Telegramga kiring va guruhingizga natijani “Paste / Вставить” qilib yuboring.</div>
+          <div class="modal-title" id="guideTitle">Natija nusxalandi</div>
+          <div class="modal-sub">Telegram guruhga yuborish uchun quyidagilarni bajaring.</div>
         </div>
         <button class="btn ghost" type="button" id="btnGuideBack">⬅️ Orqaga</button>
         <button class="btn ghost" type="button" id="btnGuideClose">Yopish</button>
       </div>
 
       <div class="note">
-        ✅ <b>Nusxa olindi.</b> Endi Telegramga kiring va o‘zingizning guruhingizni oching.<br/>
-        1) Xabar yozish joyidagi bo‘sh joyni <b>bosib turing</b>.<br/>
-        2) <b>“Paste / Вставить”</b> ni tanlang.<br/>
-        3) <b>Yuboring</b> — natija guruhda chiqadi.
+        1) Telegram guruhingiz ochiladi (yoki o‘zingiz ochasiz).<br/>
+        2) Xabar yozish oynasidagi bo‘sh joyni <b>bosib turing</b>.<br/>
+        3) <b>“Paste / Вставить”</b> ni tanlang.<br/>
+        4) <b>Yuboring</b> — natija guruhda paydo bo‘ladi.
       </div>
 
       <label style="margin-top:10px">Nusxalangan matn</label>
@@ -724,8 +724,7 @@ const el = {
 
   resTitle: $("resTitle"),
   btnBack2: $("btnBack2"),
-  btnSendTg: $("btnSendTg"),
-  btnCopy: $("btnCopy"),
+btnCopy: $("btnCopy"),
   leaderboardWrap: $("leaderboardWrap"),
   detailWrap: $("detailWrap"),
   rankLine: $("rankLine"),
@@ -872,6 +871,50 @@ function setLocalReportLink(v){
   try{ localStorage.setItem(LS_REPORT_KEY, v); }catch(_){}
 }
 
+
+/* ===== Local: details auto-hide (1 soat) + last summary =====
+   - "Nusxa olish" bosilgandan keyin 1 soat: savol-javob tafsiloti ko‘rinadi
+   - 1 soatdan keyin: tafsilot ko‘rsatilmaydi (faqat urinish/foiz/o‘rin)
+   - localStorage faqat SUMMARY ni saqlaydi (tafSilotlar yozilmaydi)
+*/
+const LS_HIDE_DETAILS_PREFIX = "tm_hide_details_at__";
+const LS_LAST_SUMMARY_PREFIX = "tm_last_summary__";
+
+function _lsKey(prefix, code, login){
+  return `${prefix}${String(code||"")}__${String(login||"").toLowerCase()}`;
+}
+function hideDetailsKey(code, login){ return _lsKey(LS_HIDE_DETAILS_PREFIX, code, login); }
+function lastSummaryKey(code, login){ return _lsKey(LS_LAST_SUMMARY_PREFIX, code, login); }
+
+function setHideDetailsAt(code, login, ts){
+  try{ localStorage.setItem(hideDetailsKey(code, login), String(Number(ts)||0)); }catch(_){}
+}
+function getHideDetailsAt(code, login){
+  try{ return Number(localStorage.getItem(hideDetailsKey(code, login)) || 0) || 0; }catch(_){ return 0; }
+}
+function clearHideDetailsAt(code, login){
+  try{ localStorage.removeItem(hideDetailsKey(code, login)); }catch(_){}
+}
+
+function setLastSummary(code, login, obj){
+  try{ localStorage.setItem(lastSummaryKey(code, login), JSON.stringify(obj||{})); }catch(_){}
+}
+function getLastSummary(code, login){
+  try{
+    const raw = localStorage.getItem(lastSummaryKey(code, login));
+    if(!raw) return null;
+    const o = JSON.parse(raw);
+    return (o && o.code && o.login) ? o : null;
+  }catch(_){ return null; }
+}
+
+// Safety wrappers: qisman nusxa ko‘chirganda ham xatolik chiqmasin
+function safeGetHideAt(code, login){
+  try{ return (typeof getHideDetailsAt === "function") ? getHideDetailsAt(code, login) : 0; }catch(_){ return 0; }
+}
+function safeSetHideAt(code, login, ts){
+  try{ if(typeof setHideDetailsAt === "function") setHideDetailsAt(code, login, ts); }catch(_){}
+}
 async function loadReportLink(){
   // 1) fast local
   const local = normalizeUrl(getLocalReportLink());
@@ -955,48 +998,6 @@ function markViewed(code){
 function isViewed(code){
   return getViewed().includes(code);
 }
-
-
-/* ===== Local cache: last result (fallback) =====
-  - Faqat foydalanuvchining oxirgi natijasi localStorage’da saqlanadi.
-  - UI tez ochilishi uchun: avval local’dan ko‘rsatamiz, keyin Firestore’dan yangilaymiz.
-*/
-const LS_LAST_RESULT_PREFIX = "tm_last_result__";
-
-function resultLsKey(code, login){
-  return `${LS_LAST_RESULT_PREFIX}${String(code||"")}__${String(login||"").toLowerCase()}`;
-}
-function saveLocalResult(rec){
-  try{
-    if(!rec?.code || !rec?.login) return;
-    localStorage.setItem(resultLsKey(rec.code, rec.login), JSON.stringify(rec));
-  }catch(_){}
-}
-function loadLocalResult(code, login){
-  try{
-    const raw = localStorage.getItem(resultLsKey(code, login));
-    if(!raw) return null;
-    const rec = JSON.parse(raw);
-    return (rec && rec.code && rec.login) ? rec : null;
-  }catch(_){ return null; }
-}
-
-/* ===== Local: details auto-hide timer (1 soat) ===== */
-const LS_HIDE_DETAILS_PREFIX = "tm_hide_details_at__";
-
-function hideDetailsKey(code, login){
-  return `${LS_HIDE_DETAILS_PREFIX}${String(code||"")}__${String(login||"").toLowerCase()}`;
-}
-function setHideDetailsAt(code, login, ts){
-  try{ localStorage.setItem(hideDetailsKey(code, login), String(Number(ts)||0)); }catch(_){}
-}
-function getHideDetailsAt(code, login){
-  try{
-    const v = localStorage.getItem(hideDetailsKey(code, login));
-    return Number(v||0);
-  }catch(_){ return 0; }
-}
-
 
 /* ===== DB layer ===== */
 const CACHE = { tests:null, ts:0, statsByCode:new Map() };
@@ -1635,20 +1636,34 @@ async function finishTest(){
     date: Date.now()
   };
   await upsertResult(resultRec);
-  saveLocalResult(resultRec);
+
+  // Local summary: faqat qisqa ma'lumot (tafSilot localStorage-ga yozilmaydi)
+  try{
+    clearHideDetailsAt(PLAY.code, SESSION.login); // yangi natija chiqqanda tafsilotlar ochiq bo‘lsin
+    setLastSummary(PLAY.code, SESSION.login, {
+      code: PLAY.code,
+      login: SESSION.login,
+      attempts: prevAttempts + 1,
+      correctTotal: score,
+      wrongTotal: wrong,
+      acc: PLAY.count ? Math.round((score/PLAY.count)*100) : 0,
+      rank: null,
+      participants: null,
+      updatedAt: Date.now()
+    });
+  }catch(_){}
 
   // Natijani ko'rsatish
   await viewResults(PLAY.code, resultRec);
   haptic("medium");
-  // Avtomatik nusxa/Telegram ochish yo‘q: xato yuborib qo‘ymaslik uchun.
-  showToast("✅ Natija saqlandi. Telegramga yuborish uchun “Nusxa olish” tugmasini bosing.", 3200);
+  // Avtomatik nusxa + Telegram ochish o‘chirildi: faqat "Nusxa olish" tugmasi orqali.
 }
 /* ===== Results ===== */
 function pct(rec){ return Math.round((rec.score/rec.total)*100); }
 
 
 function makeAllStatsText(test, arr){
-  let text = `🏁 Reyting (12 soatlik tafsilotlar o‘chadi)\n🧪 Test: ${test.name} (${test.code})\n📝 Savollar: ${test.count} ta\n👥 Ishtirokchilar: ${arr.length} ta\n---\n`;
+  let text = `🏁 Reyting (tafSilotlar 1 soatda yashiriladi)\n🧪 Test: ${test.name} (${test.code})\n📝 Savollar: ${test.count} ta\n👥 Ishtirokchilar: ${arr.length} ta\n---\n`;
   if(!arr.length){
     text += "Hali natijalar yo‘q.\n";
     return text;
@@ -1662,35 +1677,6 @@ function makeAllStatsText(test, arr){
   return text;
 }
 
-
-function makeShareText(test, rec, statsArr){
-  const score = Number(rec?.score||0);
-  const total = Number(rec?.total||0);
-  const percent = total ? Math.round((score/total)*100) : 0;
-  const login = String(rec?.login || SESSION?.login || "").trim();
-
-  let attempts = Number(rec?.attempt || 0);
-  let rank = null;
-  let participants = null;
-
-  if(Array.isArray(statsArr) && statsArr.length && login){
-    participants = statsArr.length;
-    const idx = statsArr.findIndex(r => String(r.login) === login);
-    if(idx >= 0){
-      rank = idx + 1;
-      attempts = Math.max(attempts, Number(statsArr[idx]?.attempts || 0));
-    }
-  }
-
-  const lines = [];
-  lines.push(`🧪 Test: ${test?.name || "Test"} (${test?.code || ""})`);
-  if(login) lines.push(`👤 Ism: ${login}`);
-  lines.push(`📊 Natija: ${score}/${total} — ${percent}%`);
-  if(attempts) lines.push(`🔁 Ishlagan: ${attempts} marta`);
-  if(rank != null && participants != null) lines.push(`🏆 O‘rin: #${rank} / ${participants}`);
-  return lines.join("\n");
-}
-
 function makeCopyText(test, rec){
   const lines = [];
   lines.push(`🧪 Test: ${test.name} (${test.code})`);
@@ -1701,17 +1687,50 @@ function makeCopyText(test, rec){
   return lines.join("\n");
 }
 
-function renderMyDetail(rec, isOther=false){
+function makeShareText(test, rec, statsArr){
+  // Qisqa va qulay (Telegramga paste qilish uchun)
   const score = Number(rec.score||0);
   const total = Number(rec.total||0);
   const wrong = total - score;
   const acc = total ? Math.round((score/total)*100) : 0;
 
-  const attempt = Number(rec.attempt||0);
-  const isAdmin = (SESSION?.role === "admin");
-  const hideAt = (!isAdmin && !isOther) ? getHideDetailsAt(rec?.code, rec?.login) : 0;
-  const canShowDetails = isAdmin || isOther || !hideAt || (Date.now() <= hideAt);
-const who = isOther ? `<div class="pill">👤 ${esc(rec.login||"")}</div>` : `<div class="pill ok">👤 Siz</div>`;
+  let rank = null, participants = null, attempts = null;
+  if(Array.isArray(statsArr) && statsArr.length && rec.login){
+    const idx = statsArr.findIndex(r=>String(r.login)===String(rec.login));
+    if(idx>=0){
+      rank = idx+1;
+      participants = statsArr.length;
+      attempts = Number(statsArr[idx].attempts||0);
+    }
+  }
+  // fallback: local summary (agar Firestore hali kelmagan bo‘lsa)
+  if((rank==null || participants==null || attempts==null) && test?.code && rec.login){
+    const ls = getLastSummary(test.code, rec.login);
+    if(ls){
+      if(rank==null && ls.rank!=null) rank = ls.rank;
+      if(participants==null && ls.participants!=null) participants = ls.participants;
+      if(attempts==null && ls.attempts!=null) attempts = ls.attempts;
+    }
+  }
+
+  const lines = [];
+  lines.push(`🧪 Test: ${test?.name||"Test"} (${test?.code||""})`);
+  lines.push(`👤 Ism: ${rec.login}`);
+  if(attempts!=null) lines.push(`🔁 Urinish: ${attempts}`);
+  lines.push(`✅ To‘g‘ri: ${score}   ❌ Xato: ${wrong}   📊 ${acc}%`);
+  if(rank!=null && participants!=null) lines.push(`🏅 O‘rin: #${rank} / ${participants}`);
+  lines.push(`🕒 Sana: ${new Date(rec.date||Date.now()).toLocaleString()}`);
+  return lines.join("\n");
+}
+
+
+function renderMyDetail(rec, isOther=false, canShowDetails=true){
+  const score = Number(rec.score||0);
+  const total = Number(rec.total||0);
+  const wrong = total - score;
+  const acc = total ? Math.round((score/total)*100) : 0;
+
+  const who = isOther ? `<div class="pill">👤 ${esc(rec.login||"")}</div>` : `<div class="pill ok">👤 Siz</div>`;
   const when = rec.date ? new Date(rec.date).toLocaleString() : "-";
 
   let html = `
@@ -1720,7 +1739,6 @@ const who = isOther ? `<div class="pill">👤 ${esc(rec.login||"")}</div>` : `<d
         <div class="item-title">Natija tafsiloti</div>
         <div class="row" style="gap:8px;flex-wrap:wrap">
           ${who}
-          <div class="pill">🔁 ${attempt||0} marta</div>
           <div class="pill">${acc}%</div>
           <div class="pill">🕒 ${when}</div>
         </div>
@@ -1748,6 +1766,14 @@ const who = isOther ? `<div class="pill">👤 ${esc(rec.login||"")}</div>` : `<d
     });
     html += `</div></div>`;
   }
+
+  else if(!canShowDetails && !isOther){
+    html += `<div class="item">
+      <div class="item-title">Tafsilotlar yashirildi</div>
+      <div class="item-meta">Nusxa olingandan keyin 1 soat o‘tgach savol-javob tafsilotlari ko‘rsatilmaydi. Reyting, urinish va foiz saqlanib qoladi.</div>
+    </div>`;
+  }
+
   return html;
 }
 
@@ -1784,6 +1810,22 @@ function renderLeaderboard(statsArr){
     const idx = statsArr.findIndex(r=>String(r.login)===String(SESSION.login));
     if(idx>=0){
       const me = statsArr[idx];
+      // Local summary-ni yangilab boramiz (urinish/foiz/o‘rin saqlansin)
+      try{
+        const totalQ = Number(me.correctTotal||0) + Number(me.wrongTotal||0);
+        const acc = totalQ ? Math.round((Number(me.correctTotal||0)/totalQ)*100) : 0;
+        setLastSummary(CURRENT_TEST?.code, SESSION.login, {
+          code: CURRENT_TEST?.code,
+          login: SESSION.login,
+          attempts: Number(me.attempts||0),
+          correctTotal: Number(me.correctTotal||0),
+          wrongTotal: Number(me.wrongTotal||0),
+          acc,
+          rank: idx+1,
+          participants: statsArr.length,
+          updatedAt: Date.now()
+        });
+      }catch(_){}
       el.rankLine.innerHTML = `Sizning o‘rningiz: <b>#${idx+1}</b> / ${statsArr.length} • Oxirgi: <b>${me.lastScore||0}/${me.lastTotal||0}</b>`;
     }else{
       el.rankLine.innerHTML = `Ishtirokchilar: <b>${statsArr.length}</b> ta`;
@@ -1828,7 +1870,7 @@ function renderLeaderboard(statsArr){
         showToast("Bu foydalanuvchining tafsiloti topilmadi.");
         return;
       }
-      el.detailWrap.innerHTML = renderMyDetail(rec, true);
+      el.detailWrap.innerHTML = renderMyDetail(rec, true, true);
       LAST_COPY_TEXT = makeCopyText(CURRENT_TEST, rec);
       showToast(`👁️ ${login} natijasi ochildi.`);
       haptic("light");
@@ -1849,10 +1891,6 @@ function subscribeStats(code){
     const arr=[]; snap.forEach(d=>arr.push(d.data()));
     sortStats(arr);
     CURRENT_STATS = arr;
-
-    if(MY_TEMP && CURRENT_TEST && SESSION?.role !== "admin"){
-      LAST_COPY_TEXT = makeShareText(CURRENT_TEST, MY_TEMP, arr);
-    }
 
     if(LB_TIMER) clearTimeout(LB_TIMER);
     LB_TIMER = setTimeout(()=> renderLeaderboard(arr), 250);
@@ -1876,29 +1914,27 @@ async function viewResults(code, justMade=null){
 
   // Detail: user sees own; admin sees own by default, can click row for others
   let rec = null;
-  const login = SESSION?.login;
-  if(login){
-    // 1) tez: local cache (agar justMade bo'lmasa)
-    if(!justMade){
-      const cached = loadLocalResult(code, login);
-      if(cached) rec = cached;
-    }
-    // 2) Firestore (source of truth)
-    try{
-      const fromDb = justMade || await getResult(code, login);
-      if(fromDb){
-        rec = fromDb;
-        saveLocalResult(fromDb);
-      }
-    }catch(_){}
+  if(SESSION.login){
+    rec = justMade || await getResult(code, SESSION.login);
   }
-if(rec){
-    MY_TEMP = rec;
-    el.detailWrap.innerHTML = renderMyDetail(rec, false);
-    if(SESSION?.role === "admin"){
-      LAST_COPY_TEXT = makeCopyText(t, rec);
-    }else{
-      LAST_COPY_TEXT = makeShareText(t, rec, CURRENT_STATS || []);
+
+  if(rec){
+    const hideAt = (SESSION?.role==="admin") ? 0 : safeGetHideAt(code, SESSION.login);
+    const canShowDetails = (SESSION?.role==="admin") || !hideAt || (Date.now() <= hideAt);
+    el.detailWrap.innerHTML = renderMyDetail(rec, false, canShowDetails);
+    LAST_COPY_TEXT = makeShareText(t, rec, CURRENT_STATS || []);
+
+    // hideAt bo‘lsa — vaqt tugaganda avtomatik yashiramiz
+    if(hideAt && hideAt > Date.now() && SESSION?.role!=="admin"){
+      clearTimeout(viewResults._hideT);
+      viewResults._hideT = setTimeout(async ()=>{
+        try{
+          if(CURRENT_TEST?.code !== code) return;
+          const latest = await getResult(code, SESSION.login);
+          if(!latest) return;
+          el.detailWrap.innerHTML = renderMyDetail(latest, false, false);
+        }catch(_){}
+      }, Math.max(60, hideAt - Date.now() + 50));
     }
   }else{
     el.detailWrap.innerHTML = `<div class="item">
@@ -1948,37 +1984,45 @@ if(rec){
     el.detailWrap.appendChild(box);
   }
 }
-/* ===== Copy button (Telegramga yuborish uchun) ===== */
+/* ===== Copy button (faqat nusxa olish) ===== */
 el.btnCopy.addEventListener("click", async ()=>{
   if(!CURRENT_TEST) return showToast("Avval testni tanlang yoki yakunlang.");
 
-  // Admin: reyting (hamma) nusxasi
+  // Admin: reyting nusxasi
   if(SESSION?.role === "admin"){
     const text = makeAllStatsText(CURRENT_TEST, CURRENT_STATS || []);
     await copyToClipboard(text);
-    showToast("✅ Hisobot nusxasi olindi. Telegramga yuborish uchun “Paste / Вставить” qiling.", 3600);
+    showToast("✅ Nusxa olindi. Endi Telegramga kiring va guruhingizga natijani “Paste / Вставить” qiling.", 3800);
     openGuideModal(text, false, 4000);
     haptic("light");
     return;
   }
 
-  // User: faqat summary (urinsh + foiz + o‘rin)
-  let rec = MY_TEMP;
-  if(!rec && SESSION?.login){
-    rec = loadLocalResult(CURRENT_TEST.code, SESSION.login) || await getResult(CURRENT_TEST.code, SESSION.login);
-    if(rec) saveLocalResult(rec);
-  }
+  if(!SESSION?.login) return showToast("Avval ism kiriting.");
+
+  const rec = await getResult(CURRENT_TEST.code, SESSION.login);
   if(!rec) return showToast("Avval testni yakunlang.");
 
   const text = makeShareText(CURRENT_TEST, rec, CURRENT_STATS || []);
-  LAST_COPY_TEXT = text;
   await copyToClipboard(text);
-  // Tafsilotlar 1 soat davomida ko‘rinadi, keyin yashiriladi
-  const prev = getHideDetailsAt(CURRENT_TEST.code, SESSION.login);
-  const next = Date.now() + 60*60*1000;
-  setHideDetailsAt(CURRENT_TEST.code, SESSION.login, Math.max(prev||0, next));
 
-  showToast("✅ Nusxa olindi. Endi Telegramga kiring va guruhingizga natijani “Paste / Вставить” qiling.", 3800);
+  // Tafsilotlar 1 soat davomida ko‘rinadi, keyin yashiriladi
+  const prev = safeGetHideAt(CURRENT_TEST.code, SESSION.login);
+  const next = Date.now() + 60*60*1000;
+  safeSetHideAt(CURRENT_TEST.code, SESSION.login, Math.max(prev||0, next));
+
+  // 1 soat tugaganda shu sahifadagi tafsilotni ham yashiramiz
+  clearTimeout(el.btnCopy._hideT);
+  el.btnCopy._hideT = setTimeout(async ()=>{
+    try{
+      if(CURRENT_TEST?.code !== rec.code) return;
+      const latest = await getResult(rec.code, rec.login);
+      if(!latest) return;
+      el.detailWrap.innerHTML = renderMyDetail(latest, false, false);
+    }catch(_){}
+  }, 60*60*1000 + 80);
+
+  showToast("✅ Nusxa olindi. Endi Telegramga kiring va o‘z guruhingizga natijani “Paste / Вставить” qiling.", 3800);
   openGuideModal(text, false, 4000);
   haptic("light");
 });
@@ -1998,30 +2042,37 @@ async function copyAdminReport(code){
 
 /* ===== Clipboard guide ===== */
 let LAST_GUIDE_TEXT = "";
-let GUIDE_AUTO_T = null;
 
-function openGuideModal(text, openChat=false, autoCloseMs=null){
+let GUIDE_AUTO_TIMER = null;
+function openGuideModal(text, openChat=false, autoCloseMs=0){
   LAST_GUIDE_TEXT = text || "";
   if(el.guideText) el.guideText.value = LAST_GUIDE_TEXT;
 
   el.guideModal?.classList.remove("hidden");
 
-  if(autoCloseMs){
-    clearTimeout(GUIDE_AUTO_T);
-    GUIDE_AUTO_T = setTimeout(()=> closeGuideModal(), autoCloseMs);
+  if(GUIDE_AUTO_TIMER){
+    clearTimeout(GUIDE_AUTO_TIMER);
+    GUIDE_AUTO_TIMER = null;
   }
 
   if(openChat){
     // Telegram guruh linkini ochishga urinib ko‘ramiz
     openTelegram(REPORT_LINK);
   }
+
+  if(autoCloseMs && Number(autoCloseMs)>0){
+    GUIDE_AUTO_TIMER = setTimeout(()=>{
+      try{ closeGuideModal(); }catch(_){}
+      GUIDE_AUTO_TIMER = null;
+    }, Number(autoCloseMs));
+  }
 }
 
+
 function closeGuideModal(){
-  clearTimeout(GUIDE_AUTO_T);
-  GUIDE_AUTO_T = null;
   el.guideModal?.classList.add("hidden");
 }
+
 el.btnGuideBack?.addEventListener("click", closeGuideModal);
 el.btnGuideClose?.addEventListener("click", closeGuideModal);
 el.guideModal?.addEventListener("click", (e)=>{
