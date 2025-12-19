@@ -797,15 +797,11 @@ async function copyToClipboard(text){
 // Eslatma: WebApp ichidan guruhga avtomatik post qilish faqat bot-server orqali bo‘ladi.
 // Bu tugma sizga eng qulay yo‘l: Copy + Telegramga o'tish.
 async function sendResultToTelegram(text){
+  // Endi hech qachon Telegramni o‘zi ochmaydi va hech kimga avtomatik jo‘natmaydi.
+  // Faqat: nusxa olish + pastda 5 soniyalik ko‘rsatma.
   if(!text) return showToast("Avval natija chiqsin.");
-  const fullText = text;
-
-  // 1) Clipboardga nusxalaymiz
-  await copyToClipboard(fullText);
-
-  // 2) Ko‘rsatma beramiz va Telegram guruh linkini ochamiz
-  showToast("✅ Natijangiz nusxalandi. Telegramga yuborish uchun ko‘rsatmalar chiqdi.");
-  openGuideModal(fullText, true);
+  await copyToClipboard(text);
+  showToast("✅ Nusxa olindi. Endi Telegramga o‘ting va kerakli guruhingizga “Paste / Вставить” qiling.", 5000);
   haptic("light");
 }
 
@@ -1720,7 +1716,20 @@ function makeShareText(test, rec, statsArr){
   lines.push(`✅ To‘g‘ri: ${score}   ❌ Xato: ${wrong}   📊 ${acc}%`);
   if(rank!=null && participants!=null) lines.push(`🏅 O‘rin: #${rank} / ${participants}`);
   lines.push(`🕒 Sana: ${new Date(rec.date||Date.now()).toLocaleString()}`);
-  return lines.join("\n");
+  
+  // Savolma-s...: to‘liq ishlangan natija (Telegramga paste qilish uchun)
+  if(Array.isArray(rec.details) && rec.details.length){
+    lines.push("");
+    lines.push("📌 Savollar bo‘yicha natija:");
+    rec.details.forEach(d=>{
+      const q = (d && d.q!=null) ? d.q : "";
+      const ok = (d && d.ok) ? "✅" : "❌";
+      const chosen = (d && d.chosen!=null) ? String(d.chosen) : "-";
+      const correct = (d && d.correct!=null) ? String(d.correct) : "-";
+      lines.push(`#${q} ${ok}  Siz: ${chosen}  |  To‘g‘ri: ${correct}`);
+    });
+  }
+return lines.join("\n");
 }
 
 
@@ -1992,9 +2001,8 @@ el.btnCopy.addEventListener("click", async ()=>{
   if(SESSION?.role === "admin"){
     const text = makeAllStatsText(CURRENT_TEST, CURRENT_STATS || []);
     await copyToClipboard(text);
-    showToast("✅ Nusxa olindi. Endi Telegramga kiring va guruhingizga natijani “Paste / Вставить” qiling.", 3800);
-    openGuideModal(text, false, 4000);
-    haptic("light");
+    showToast("✅ Nusxa olindi. Endi Telegramga o‘ting va kerakli guruhingizga “Paste / Вставить” qiling.", 5000);
+haptic("light");
     return;
   }
 
@@ -2022,9 +2030,8 @@ el.btnCopy.addEventListener("click", async ()=>{
     }catch(_){}
   }, 60*60*1000 + 80);
 
-  showToast("✅ Nusxa olindi. Endi Telegramga kiring va o‘z guruhingizga natijani “Paste / Вставить” qiling.", 3800);
-  openGuideModal(text, false, 4000);
-  haptic("light");
+  showToast("✅ Nusxa olindi. Endi Telegramga o‘ting va kerakli guruhingizga “Paste / Вставить” qiling.", 5000);
+haptic("light");
 });
 /* ===== Admin report copy ===== */
 async function copyAdminReport(code){
@@ -2045,27 +2052,11 @@ let LAST_GUIDE_TEXT = "";
 
 let GUIDE_AUTO_TIMER = null;
 function openGuideModal(text, openChat=false, autoCloseMs=0){
+  // (O‘chirildi) Eski "ko‘rsatma modal" endi ochilmaydi.
+  // Biz faqat pastdagi toast bilan yo‘riqnoma beramiz.
   LAST_GUIDE_TEXT = text || "";
   if(el.guideText) el.guideText.value = LAST_GUIDE_TEXT;
-
-  el.guideModal?.classList.remove("hidden");
-
-  if(GUIDE_AUTO_TIMER){
-    clearTimeout(GUIDE_AUTO_TIMER);
-    GUIDE_AUTO_TIMER = null;
-  }
-
-  if(openChat){
-    // Telegram guruh linkini ochishga urinib ko‘ramiz
-    openTelegram(REPORT_LINK);
-  }
-
-  if(autoCloseMs && Number(autoCloseMs)>0){
-    GUIDE_AUTO_TIMER = setTimeout(()=>{
-      try{ closeGuideModal(); }catch(_){}
-      GUIDE_AUTO_TIMER = null;
-    }, Number(autoCloseMs));
-  }
+  return;
 }
 
 
